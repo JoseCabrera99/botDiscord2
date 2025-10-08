@@ -98,10 +98,8 @@ client.on("interactionCreate", async (interaction) => {
         name: "⏰ Próximos posibles horarios",
         value: horariosPosibles.map((h) => `> 🕐 ${h}`).join("\n"),
       })
-      .setThumbnail("https://cdn-icons-png.flaticon.com/512/929/929426.png") // icono tipo spray
       .setFooter({
         text: "Midnight • Grafitti",
-        iconURL: "https://cdn-icons-png.flaticon.com/512/833/833472.png", // icono pequeño decorativo
       });
 
     await interaction.reply({ embeds: [embed] });
