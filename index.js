@@ -7,6 +7,7 @@ import {
   Routes,
 } from "discord.js";
 import dotenv from "dotenv";
+import express from 'express';
 dotenv.config();
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
@@ -108,7 +109,6 @@ client.on("interactionCreate", async (interaction) => {
 
 client.login(process.env.TOKEN);
 
-const express = require('express');
 const app = express();
 
 app.get('/', (req, res) => res.send('Bot activo ✅'));
