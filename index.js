@@ -89,15 +89,20 @@ client.on("interactionCreate", async (interaction) => {
     });
 
     const embed = new EmbedBuilder()
-      .setTitle("📍 Reporte de Graffiti")
-      .setColor("#2ecc71")
-      .addFields(
-        { name: "Ubicación", value: ubicacion, inline: true },
-        { name: "Hora", value: `${horaStr}`, inline: true },
-        { name: "Número", value: numero.toString(), inline: true },
-        { name: "Posibles horarios", value: horariosPosibles.join(" | ") }
+      .setColor("#9b59b6") // Verde agua, moderno y limpio
+      .setTitle("🎨 Reporte de Graffiti")
+      .setDescription(
+        `📍 **Ubicación:** ${ubicacion}\n> 🕒 **Hora:** ${horaStr}\n> 🔢 **Número:** ${numero}`
       )
-      .setFooter({ text: "Sistema de reportes - GraffBot" });
+      .addFields({
+        name: "⏰ Próximos posibles horarios",
+        value: horariosPosibles.map((h) => `> 🕐 ${h}`).join("\n"),
+      })
+      .setThumbnail("https://cdn-icons-png.flaticon.com/512/929/929426.png") // icono tipo spray
+      .setFooter({
+        text: "Midnight • Grafitti",
+        iconURL: "https://cdn-icons-png.flaticon.com/512/833/833472.png", // icono pequeño decorativo
+      });
 
     await interaction.reply({ embeds: [embed] });
   }
