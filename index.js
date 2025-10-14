@@ -124,7 +124,7 @@ client.on("interactionCreate", async (interaction) => {
       .setColor("#9b59b6")
       .setTitle("🎨 Reporte de Graffiti")
       .setDescription(
-        `📍 **Ubicación:** ${ubicacion}\n🔢 **Número:** ${numero} 🕒 **Hora HUB:** ${horaStr} 🕒 **Hora local:** ${discordTimestampBase} `
+        `📍 **Ubicación:** ${ubicacion}\n🔢 **Número:** ${numero}\n 🕒 **Hora HUB:** ${horaStr}\n 🕒 **Hora local:** ${discordTimestampBase}\n`
       )
       .addFields(
         {
