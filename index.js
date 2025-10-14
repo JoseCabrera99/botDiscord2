@@ -13,7 +13,7 @@ dotenv.config();
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 // ---------------------------
-// Registro del comando /graff
+// Registro del comando /graff (sin cambios)
 // ---------------------------
 const commands = [
   new SlashCommandBuilder()
@@ -39,7 +39,7 @@ const commands = [
     ),
 ].map((command) => command.toJSON());
 
-// Registrar comando en tu servidor
+// Registrar comando en tu servidor (sin cambios)
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
 (async () => {
@@ -58,16 +58,16 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 })();
 
 // ---------------------------
-// Manejo del comando
+// Manejo del comando (MODIFICADO)
 // ---------------------------
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName === "graf") {
     const ubicacion = interaction.options.getString("ubicacion");
-    const horaStr = interaction.options.getString("hora");
+    const horaStr = interaction.options.getString("hora"); // Esta es la hora UTC base
     const numero = interaction.options.getInteger("numero");
 
-    // Validar formato HH:MM
+    // Validar formato HH:MM (sin cambios)
     const match = horaStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
     if (!match) {
       return interaction.reply({
@@ -79,26 +79,67 @@ client.on("interactionCreate", async (interaction) => {
     const hora = parseInt(match[1]);
     const minutos = parseInt(match[2]);
 
-    // Calcular horarios posibles (+12h, +13h, +14h)
-    const horariosPosibles = [12, 13, 14].map((sum) => {
-      const totalMin = hora * 60 + minutos + sum * 60;
-      const nuevaHora = Math.floor((totalMin / 60) % 24);
-      const nuevosMinutos = totalMin % 60;
-      return `${String(nuevaHora).padStart(2, "0")}:${String(
-        nuevosMinutos
-      ).padStart(2, "0")}`;
+    // Obtener la fecha UTC de hoy para la hora ingresada
+    const today = new Date();
+    const baseDate = new Date(
+        Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), hora, minutos)
+    );
+    
+    // Función para obtener el timestamp Unix (en segundos)
+    const getUnixTimestamp = (date) => Math.floor(date.getTime() / 1000);
+
+    // ------------------------------------------
+    // 1. TIMESTAMP BASE (La hora ingresada)
+    // ------------------------------------------
+    const baseTimestamp = getUnixTimestamp(baseDate);
+    const discordTimestampBase = `<t:${baseTimestamp}:F>`;
+
+    // ------------------------------------------
+    // 2. CÁLCULO DE HORARIOS POSIBLES
+    // ------------------------------------------
+    const diffs = [12, 13, 14];
+    const horariosPosibles = diffs.map((sum) => {
+      // Clona la fecha base y agrega las horas
+      const newDate = new Date(baseDate.getTime());
+      newDate.setUTCHours(baseDate.getUTCHours() + sum);
+      
+      // Hora UTC (HUB) formateada (HH:MM)
+      const hubHora = String(newDate.getUTCHours()).padStart(2, "0");
+      const hubMinutos = String(newDate.getUTCMinutes()).padStart(2, "0");
+      const hubStr = `${hubHora}:${hubMinutos}`;
+      
+      // Hora local (TIMESTAMP)
+      const localTimestamp = `<t:${getUnixTimestamp(newDate)}:F>`;
+      
+      return {
+          hub: hubStr,
+          local: localTimestamp,
+      };
     });
 
+    // ------------------------------------------
+    // 3. CONSTRUCCIÓN del EMBED
+    // ------------------------------------------
     const embed = new EmbedBuilder()
-      .setColor("#9b59b6") // Verde agua, moderno y limpio
+      .setColor("#9b59b6")
       .setTitle("🎨 Reporte de Graffiti")
       .setDescription(
-        `📍 **Ubicación:** ${ubicacion}\n> 🕒 **Hora:** ${horaStr}\n> 🔢 **Número:** ${numero}`
+        `📍 **Ubicación:** ${ubicacion}\n🔢 **Número:** ${numero}`
       )
-      .addFields({
-        name: "⏰ Próximos posibles horarios",
-        value: horariosPosibles.map((h) => `> 🕐 ${h}`).join("\n"),
-      })
+      .addFields(
+        {
+          name: "Original 🕒",
+          value: `HUB (UTC): \`${horaStr}\`\nLocal (Tu zona): ${discordTimestampBase}`,
+          inline: false,
+        },
+        {
+          name: "⏰ Próximos Posibles Horarios",
+          value: horariosPosibles.map((h, index) => 
+            `**+${diffs[index]}h**\n> HUB (UTC): \`${h.hub}\`\n> Local (Tu zona): ${h.local}`
+          ).join("\n\n"),
+          inline: false,
+        }
+      )
       .setFooter({
         text: "Midnight • Grafitti",
       });
