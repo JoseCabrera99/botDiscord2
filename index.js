@@ -35,7 +35,7 @@ const commands = [
       option
         .setName("numero")
         .setDescription("Número identificador")
-        .setRequired(true)
+        .setRequired(false)
     ),
 ].map((command) => command.toJSON());
 
