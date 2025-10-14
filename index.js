@@ -13,7 +13,7 @@ dotenv.config();
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 // ---------------------------
-// Registro del comando /graff (sin cambios)
+// Registro del comando /graff
 // ---------------------------
 const commands = [
   new SlashCommandBuilder()
@@ -39,7 +39,7 @@ const commands = [
     ),
 ].map((command) => command.toJSON());
 
-// Registrar comando en tu servidor (sin cambios)
+// Registrar comando en tu servidor 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
 (async () => {
@@ -58,16 +58,16 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 })();
 
 // ---------------------------
-// Manejo del comando (MODIFICADO)
+// Manejo del comando 
 // ---------------------------
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName === "graf") {
     const ubicacion = interaction.options.getString("ubicacion");
-    const horaStr = interaction.options.getString("hora"); // Esta es la hora UTC base
+    const horaStr = interaction.options.getString("hora"); 
     const numero = interaction.options.getInteger("numero");
 
-    // Validar formato HH:MM (sin cambios)
+    // Validar formato HH:MM 
     const match = horaStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
     if (!match) {
       return interaction.reply({
@@ -124,14 +124,9 @@ client.on("interactionCreate", async (interaction) => {
       .setColor("#9b59b6")
       .setTitle("🎨 Reporte de Graffiti")
       .setDescription(
-        `📍 **Ubicación:** ${ubicacion}\n🔢 **Número:** ${numero}`
+        `📍 **Ubicación:** ${ubicacion}\n🔢 **Número:** ${numero} 🕒 **Hora HUB:** ${horaStr} 🕒 **Hora local:** ${discordTimestampBase} `
       )
       .addFields(
-        {
-          name: "Original 🕒",
-          value: `HUB (UTC): \`${horaStr}\`\nLocal (Tu zona): ${discordTimestampBase}`,
-          inline: false,
-        },
         {
           name: "⏰ Próximos Posibles Horarios",
           value: horariosPosibles.map((h, index) => 
