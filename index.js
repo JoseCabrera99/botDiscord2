@@ -8,17 +8,52 @@ import {
 } from "discord.js";
 import dotenv from "dotenv";
 import express from 'express';
+import mongoose from "mongoose"; // <-- AÑADIDO: Importar Mongoose
 dotenv.config();
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-
 // ----------------------------------------
-// DATOS EN MEMORIA (AHORA ALMACENA TIMESTAMPS)
+// ESQUEMA Y MODELO DE MONGOOSE (NUEVO)
 // ----------------------------------------
 
-// Almacena: { "nombre_completo": timestamp_unix_ms }
-// Comienza vacío, como solicitaste.
-const graffitiData = {}; 
+// Definición de la estructura de un documento Graffiti
+const GraffitiSchema = new mongoose.Schema({
+  nombre: { 
+      type: String, 
+      required: true, 
+      unique: true, 
+      lowercase: true 
+  },
+  // Almacenamos el timestamp Unix en milisegundos de la última vez que apareció.
+  lastSpawnTimestamp: { 
+      type: Number, 
+      required: true 
+  },
+}, {
+  // Opción para no incluir campos de fecha de creación/actualización automáticas
+  timestamps: false 
+});
+
+// Crear el Modelo que usaremos para interactuar con la DB
+const Graffiti = mongoose.model('Graffiti', GraffitiSchema);
+
+// ----------------------------------------
+// CONEXIÓN A LA BASE DE DATOS (MODIFICADO)
+// ----------------------------------------
+
+async function connectDB() {
+  try {
+      await mongoose.connect(process.env.MONGO_URI);
+      console.log("✅ Conexión a MongoDB Atlas establecida.");
+  } catch (error) {
+      console.error("❌ Error al conectar a MongoDB:", error);
+      // El bot no debería iniciar si la DB falla.
+      process.exit(1); 
+  }
+}
+
+// ----------------------------------------
+// FUNCIONES DE UTILIDAD (MODIFICADO)
+// ----------------------------------------
 
 /**
 * Función de utilidad para obtener el timestamp Unix (en segundos)
@@ -29,17 +64,13 @@ const getUnixTimestampSec = (date) => Math.floor(date.getTime() / 1000);
 
 /**
 * Calcula el próximo momento de aparición (en Date) para un punto.
-* Regla: Último registro + 12 horas, asegurando que el momento esté en el futuro.
-* @param {number} lastTimestampMs - Timestamp Unix en milisegundos del último registro.
-* @returns {Date} - Próxima fecha y hora de spawn (mínimo +12h).
+* (La lógica de cálculo sigue siendo la misma)
 */
 function calculateNextSpawn(lastTimestampMs) {
-  const nextSpawnTimeMs = lastTimestampMs + (12 * 60 * 60 * 1000); // Sumar 12 horas en milisegundos
+  const nextSpawnTimeMs = lastTimestampMs + (12 * 60 * 60 * 1000); 
   const nextSpawnDate = new Date(nextSpawnTimeMs);
   const now = new Date();
 
-  // Si la hora de reaparición base ya pasó (nextSpawnDate < now), 
-  // significa que el próximo spawn es 24 horas después (sumar 24 horas)
   if (nextSpawnDate < now) {
       nextSpawnDate.setTime(nextSpawnDate.getTime() + (24 * 60 * 60 * 1000));
   }
@@ -47,12 +78,11 @@ function calculateNextSpawn(lastTimestampMs) {
   return nextSpawnDate;
 }
 
-
 // ---------------------------
-// Registro de Comandos (ACTUALIZADO)
+// Registro de Comandos (SIN CAMBIOS)
 // ---------------------------
 const commands = [
-  // 1. Comando /GRAF (Reporte original - SIN MODIFICACIONES AQUÍ)
+  // 1. Comando /GRAF (Reporte original)
   new SlashCommandBuilder()
       .setName("graf")
       .setDescription("Crea un reporte de graffiti")
@@ -66,7 +96,7 @@ const commands = [
           option.setName("numero").setDescription("Número identificador").setRequired(false)
       ),
       
-  // 2. Comando /SETGRAF (SÓLO NOMBRE - AÑADIDO)
+  // 2. Comando /SETGRAF
   new SlashCommandBuilder()
       .setName("setgraf")
       .setDescription("Registra el spawn de un graffiti en el momento actual (UTC).")
@@ -77,7 +107,7 @@ const commands = [
               .setRequired(true)
       ),
       
-  // 3. Comando /NEXTGRAFF (CON FILTRO Y VENTANA - AÑADIDO)
+  // 3. Comando /NEXTGRAFF
   new SlashCommandBuilder()
       .setName("nextgraff")
       .setDescription("Muestra el graffiti cuya reaparición está más cerca de la hora límite.")
@@ -93,10 +123,9 @@ const commands = [
               .setDescription("Tiempo en minutos para la ventana de búsqueda (ej: 20)")
               .setRequired(true)
       ),
-
 ].map((command) => command.toJSON());
 
-// Registrar comandos
+// Registrar comandos (SIN CAMBIOS)
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
 (async () => {
@@ -108,14 +137,14 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
           ),
           { body: commands }
       );
-      console.log("✅ Comandos actualizados (incluyendo /setgraf y /nextgraff).");
+      console.log("✅ Comandos actualizados.");
   } catch (err) {
       console.error(err);
   }
 })();
 
 // ---------------------------
-// Manejo del comando (MODIFICADO /setgraf)
+// Manejo de Interacciones (MODIFICADO)
 // ---------------------------
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -123,113 +152,132 @@ client.on("interactionCreate", async (interaction) => {
   const commandName = interaction.commandName;
   const horaStr = interaction.options.getString("hora"); 
 
-  // --- LÓGICA /SETGRAF (MUESTRA HORA HUB HH:MM) ---
+  // --- LÓGICA /SETGRAF (MODIFICADA PARA USAR DB) ---
   if (commandName === "setgraf") {
+      await interaction.deferReply({ ephemeral: true }); // Deferir respuesta ya que la DB es lenta
+      
       const nombre = interaction.options.getString("nombre").toLowerCase();
-      
-      // 1. Tomar el tiempo actual (UTC en milisegundos)
       const currentTimestampMs = Date.now();
-      graffitiData[nombre] = currentTimestampMs;
       
-      // 2. EXTRAER LA HORA Y MINUTOS UTC (HH:MM)
-      const date = new Date(currentTimestampMs);
-      const hubHour = String(date.getUTCHours()).padStart(2, '0');
-      const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
-      const hubTimeStr = `${hubHour}:${hubMinute}`;
-      
-      // 3. Formato para la respuesta (Solicitado: ultimo spawn 03:09 HUB)
-      return interaction.reply({ 
-          content: `✅ Graffiti **${nombre.toUpperCase()}** registrado.\nÚltimo spawn **${hubTimeStr} HUB**`, 
-          ephemeral: true 
-      });
+      try {
+          // 1. Guardar/Actualizar el documento en la DB
+          await Graffiti.findOneAndUpdate(
+              { nombre: nombre },
+              { lastSpawnTimestamp: currentTimestampMs },
+              { upsert: true, new: true } // upsert: si no existe lo crea; new: devuelve el documento actualizado
+          );
+          
+          // 2. EXTRAER LA HORA Y MINUTOS UTC (HH:MM) para la respuesta
+          const date = new Date(currentTimestampMs);
+          const hubHour = String(date.getUTCHours()).padStart(2, '0');
+          const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
+          const hubTimeStr = `${hubHour}:${hubMinute}`;
+
+          await interaction.editReply({ 
+              content: `✅ Graffiti **${nombre.toUpperCase()}** registrado.\nÚltimo spawn **${hubTimeStr} HUB**`, 
+          });
+
+      } catch (error) {
+          console.error("Error al registrar graffiti:", error);
+          await interaction.editReply({ 
+              content: `❌ Error al guardar el spawn de ${nombre}. Inténtalo de nuevo.`, 
+          });
+      }
   }
 
-  // --- LÓGICA /NEXTGRAFF (Filtro y Ventana) ---
+  // --- LÓGICA /NEXTGRAFF (MODIFICADA PARA USAR DB) ---
   else if (commandName === "nextgraff") {
+      await interaction.deferReply(); // Deferir respuesta
+      
       const filtro = interaction.options.getString("filtro").toLowerCase();
       const ventanaMinutos = interaction.options.getInteger("ventana");
 
       const now = Date.now();
-      const futureLimit = now + (ventanaMinutos * 60 * 1000); // Límite de la ventana
+      const futureLimit = now + (ventanaMinutos * 60 * 1000); 
 
       let bestMatch = null;
-      let minDiffToLimit = Infinity; // Buscamos el más cercano al LÍMITE (por debajo)
-
-      const filteredEntries = Object.entries(graffitiData).filter(([nombre]) => 
-          nombre.startsWith(filtro)
-      );
-
-      if (filteredEntries.length === 0) {
-          return interaction.reply({ 
-              content: `⚠️ No se encontraron grafitis que comiencen con **${filtro}**.`, 
-              ephemeral: true 
-          });
-      }
+      let minDiffToLimit = Infinity; 
       
-      // 1. Iterar sobre los grafitis filtrados
-      for (const [nombre, lastTimestampMs] of filteredEntries) {
-          const nextSpawnDate = calculateNextSpawn(lastTimestampMs);
-          const nextSpawnTimeMs = nextSpawnDate.getTime();
+      try {
+          // 1. Obtener todos los grafitis que cumplen el filtro desde la DB
+          const allGraffiti = await Graffiti.find({ 
+              nombre: { $regex: '^' + filtro, $options: 'i' } // Busca que el nombre empiece con el filtro
+          });
 
-          // 2. Verificar la condición: ¿Está dentro de la ventana de búsqueda?
-          if (nextSpawnTimeMs >= now && nextSpawnTimeMs <= futureLimit) {
-              
-              // 3. Encontrar el más cercano al LÍMITE (por debajo)
-              const diffToLimit = futureLimit - nextSpawnTimeMs; 
-              
-              if (diffToLimit < minDiffToLimit) {
-                  minDiffToLimit = diffToLimit;
-                  bestMatch = {
-                      nombre: nombre,
-                      nextTime: nextSpawnDate,
-                      lastTime: new Date(lastTimestampMs)
-                  };
+          if (allGraffiti.length === 0) {
+              return interaction.editReply({ 
+                  content: `⚠️ No se encontraron grafitis que comiencen con **${filtro}** en la base de datos.`, 
+              });
+          }
+          
+          // 2. Iterar y encontrar el mejor match
+          for (const item of allGraffiti) {
+              const lastTimestampMs = item.lastSpawnTimestamp;
+
+              // Calcular la próxima hora de reaparición
+              const nextSpawnDate = calculateNextSpawn(lastTimestampMs);
+              const nextSpawnTimeMs = nextSpawnDate.getTime();
+
+              // Verificar si está dentro de la ventana de búsqueda
+              if (nextSpawnTimeMs >= now && nextSpawnTimeMs <= futureLimit) {
+                  
+                  // Encontrar el más cercano al LÍMITE (por debajo)
+                  const diffToLimit = futureLimit - nextSpawnTimeMs; 
+                  
+                  if (diffToLimit < minDiffToLimit) {
+                      minDiffToLimit = diffToLimit;
+                      bestMatch = {
+                          nombre: item.nombre,
+                          nextTime: nextSpawnDate,
+                          lastTime: new Date(lastTimestampMs)
+                      };
+                  }
               }
           }
-      }
-      
-      // 4. Responder
-      if (bestMatch) {
-          const unixTimestampNext = getUnixTimestampSec(bestMatch.nextTime);
-          const unixTimestampLast = getUnixTimestampSec(bestMatch.lastTime);
           
-          const embed = new EmbedBuilder()
-              .setColor("#2ecc71")
-              .setTitle(`➡️ Próximo Spawn cerca de la ventana de ${ventanaMinutos} min`)
-              .setDescription(`El graffiti **${bestMatch.nombre.toUpperCase()}** está más cerca de reaparecer en la ventana de búsqueda.`)
-              .addFields(
-                  {
-                      name: "🕒 Aparece",
-                      value: `HUB (UTC): <t:${unixTimestampNext}:T> (<t:${unixTimestampNext}:R>)`,
-                      inline: false,
-                  },
-                  {
-                      name: "📅 Último Registro",
-                      value: `<t:${unixTimestampLast}:F>`,
-                      inline: false,
-                  }
-              )
-              .setFooter({ text: `Ventana de búsqueda: ${new Date(now).toUTCString()} -> ${new Date(futureLimit).toUTCString()}` });
+          // 3. Responder
+          if (bestMatch) {
+              const unixTimestampNext = getUnixTimestampSec(bestMatch.nextTime);
+              const unixTimestampLast = getUnixTimestampSec(bestMatch.lastTime);
+              
+              const embed = new EmbedBuilder()
+                  .setColor("#2ecc71")
+                  .setTitle(`➡️ Próximo Spawn cerca de la ventana de ${ventanaMinutos} min`)
+                  .setDescription(`El graffiti **${bestMatch.nombre.toUpperCase()}** está más cerca de reaparecer en la ventana de búsqueda.`)
+                  .addFields(
+                      {
+                          name: "🕒 Aparece",
+                          value: `HUB (UTC): <t:${unixTimestampNext}:T> (<t:${unixTimestampNext}:R>)`,
+                          inline: false,
+                      },
+                      {
+                          name: "📅 Último Registro",
+                          value: `<t:${unixTimestampLast}:F>`,
+                          inline: false,
+                      }
+                  )
+                  .setFooter({ text: `Datos persistentes gracias a MongoDB` });
 
-          await interaction.reply({ embeds: [embed] });
+              await interaction.editReply({ embeds: [embed] });
 
-      } else {
-           // 5. Caso si no hay coincidencias
-           const startWindow = new Date(now);
-           const endWindow = new Date(futureLimit);
+          } else {
+               const startWindow = new Date(now);
+               const endWindow = new Date(futureLimit);
 
-           await interaction.reply({ 
-               content: `⚠️ No se encontraron reapariciones para '${filtro}' entre las ${startWindow.toTimeString().substring(0, 5)} y las ${endWindow.toTimeString().substring(0, 5)} (UTC).`, 
-               ephemeral: true 
-           });
+               await interaction.editReply({ 
+                   content: `⚠️ No se encontraron reapariciones para '${filtro}' entre las ${startWindow.toTimeString().substring(0, 5)} y las ${endWindow.toTimeString().substring(0, 5)} (UTC).`, 
+               });
+          }
+      } catch (error) {
+          console.error("Error en /nextgraff:", error);
+          await interaction.editReply("❌ Ocurrió un error al consultar la base de datos.");
       }
   }
 
   // --- LÓGICA /GRAF (TU CÓDIGO ORIGINAL SIN MODIFICACIONES) ---
   else if (commandName === "graf") {
       
-      // **TU LÓGICA DE VALIDACIÓN DE HORA ORIGINAL (RESTAURADA)**
-      if (!horaStr) { // Necesitas esta validación ya que 'hora' es requerida para /graf
+      if (!horaStr) { 
            return interaction.reply({ content: "Error: Falta la hora.", ephemeral: true });
       }
       const match = horaStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
@@ -276,10 +324,15 @@ client.on("interactionCreate", async (interaction) => {
               {
                   name: "⏰ Próximos Posibles Horarios",
                   value: horariosPosibles.map((h) => 
-                      `${h.sum}h\n> HUB (UTC): \`${h.hub}\` (${h.relative})`
+                      `**+${h.sum}h**\n> HUB (UTC): \`${h.hub}\` (${h.relative})`
                   ).join("\n\n"),
                   inline: false,
               },
+              {
+                  name: "🕐 Hora del Evento",
+                  value: `HUB: \`${horaStr}\` (${discordTimestampFull})`,
+                  inline: false,
+              }
           )
           .setFooter({
               text: "Midnight • Grafitti",
@@ -290,10 +343,12 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ----------------------------------------
-// WEB SERVER (Para UptimeRobot y Render)
+// INICIO DEL BOT (MODIFICADO para conectar DB primero)
 // ----------------------------------------
 
-client.login(process.env.TOKEN);
+connectDB().then(() => {
+  client.login(process.env.TOKEN);
+});
 
 const app = express();
 
