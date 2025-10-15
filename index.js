@@ -189,92 +189,126 @@ client.on("interactionCreate", async (interaction) => {
 
   // --- LÓGICA /NEXTGRAFF (LEE DE LA DB) ---
   else if (commandName === "nextgraff") {
-      await interaction.deferReply(); 
-      
-      const filtro = interaction.options.getString("filtro").toLowerCase();
-      const ventanaMinutos = interaction.options.getInteger("ventana");
+    await interaction.deferReply(); 
+    
+    const filtro = interaction.options.getString("filtro").toLowerCase();
+    const ventanaMinutos = interaction.options.getInteger("ventana");
 
-      const now = Date.now();
-      const futureLimit = now + (ventanaMinutos * 60 * 1000); 
+    const now = Date.now();
+    const futureLimit = now + (ventanaMinutos * 60 * 1000); 
 
-      let bestMatch = null;
-      let minDiffToLimit = Infinity; 
-      
-      try {
-          // 1. Obtener grafitis desde la DB
-          const allGraffiti = await Graffiti.find({ 
-              nombre: { $regex: '^' + filtro, $options: 'i' } 
-          });
+    // Almacenará el mejor (más cercano al límite) y los que estén cerca de él.
+    let bestMatch = null;
+    let minDiffToLimit = Infinity; 
+    
+    // Array para guardar todos los grafitis candidatos dentro de la ventana de tiempo.
+    const candidates = []; 
+    
+    // Constante de proximidad (2 minutos en milisegundos)
+    const PROXIMITY_LIMIT_MS = 2 * 60 * 1000; 
 
-          if (allGraffiti.length === 0) {
-              return interaction.editReply({ 
-                  content: `⚠️ No se encontraron grafitis que comiencen con **${filtro}** en la base de datos.`, 
-              });
-          }
-          
-          // 2. Iterar y encontrar el mejor match
-          for (const item of allGraffiti) {
-              const lastTimestampMs = item.lastSpawnTimestamp;
+    try {
+        // 1. Obtener grafitis desde la DB
+        const allGraffiti = await Graffiti.find({ 
+            nombre: { $regex: '^' + filtro, $options: 'i' } 
+        });
 
-              const nextSpawnDate = calculateNextSpawn(lastTimestampMs);
-              const nextSpawnTimeMs = nextSpawnDate.getTime();
+        if (allGraffiti.length === 0) {
+            return interaction.editReply({ 
+                content: `⚠️ No se encontraron grafitis que comiencen con **${filtro}** en la base de datos.`, 
+            });
+        }
+        
+        // 2. Iterar y encontrar todos los candidatos dentro de la ventana
+        for (const item of allGraffiti) {
+            const lastTimestampMs = item.lastSpawnTimestamp;
 
-              if (nextSpawnTimeMs >= now && nextSpawnTimeMs <= futureLimit) {
-                  
-                  const diffToLimit = futureLimit - nextSpawnTimeMs; 
-                  
-                  if (diffToLimit < minDiffToLimit) {
-                      minDiffToLimit = diffToLimit;
-                      bestMatch = {
-                          nombre: item.nombre,
-                          nextTime: nextSpawnDate,
-                          lastTime: new Date(lastTimestampMs)
-                      };
-                  }
-              }
-          }
-          
-          // 3. Responder
-          if (bestMatch) {
-              const unixTimestampNext = getUnixTimestampSec(bestMatch.nextTime);
-              const unixTimestampLast = getUnixTimestampSec(bestMatch.lastTime);
+            const nextSpawnDate = calculateNextSpawn(lastTimestampMs);
+            const nextSpawnTimeMs = nextSpawnDate.getTime();
+            const diffToLimit = futureLimit - nextSpawnTimeMs; // Diferencia con el límite
 
-              const nextHourUTC = String(bestMatch.nextTime.getUTCHours()).padStart(2, '0');
-              const nextMinuteUTC = String(bestMatch.nextTime.getUTCMinutes()).padStart(2, '0');
-              const nextTimeStr = `${nextHourUTC}:${nextMinuteUTC}`;
-              
-              const embed = new EmbedBuilder()
-                  .setColor("#2ecc71")
-                  .setTitle(`➡️ El graffiti **${bestMatch.nombre.toUpperCase()}** está más cerca de reaparecer dentro de ${ventanaMinutos}min `)
-                  .addFields(
+            // Verificar si está dentro de la ventana de búsqueda
+            if (nextSpawnTimeMs >= now && nextSpawnTimeMs <= futureLimit) {
+                
+                const candidate = {
+                    nombre: item.nombre,
+                    nextTime: nextSpawnDate,
+                    nextTimeMs: nextSpawnTimeMs,
+                    lastTime: new Date(lastTimestampMs),
+                    diffToLimit: diffToLimit
+                };
+                candidates.push(candidate);
+
+                // Determinar el mejor match (más cercano al límite superior)
+                if (diffToLimit < minDiffToLimit) {
+                    minDiffToLimit = diffToLimit;
+                    bestMatch = candidate;
+                }
+            }
+        }
+        
+        // 3. Procesar resultados
+        if (candidates.length > 0) {
+            // Si encontramos un mejor match, filtramos los que están cerca de él (2 minutos de diferencia)
+            const closestCandidates = candidates.filter(c => {
+                // Calculamos la diferencia de tiempo entre el mejor match y el candidato
+                const timeDifference = Math.abs(c.nextTimeMs - bestMatch.nextTimeMs);
+                return timeDifference <= PROXIMITY_LIMIT_MS;
+            });
+            
+            // 4. Formatear y Responder
+
+            // Ordenar por tiempo de aparición ascendente (el que aparece primero va primero)
+            closestCandidates.sort((a, b) => a.nextTimeMs - b.nextTimeMs);
+
+            const listItems = closestCandidates.map(c => {
+                const unixTimestampNext = getUnixTimestampSec(c.nextTime);
+                const nextHourUTC = String(c.nextTime.getUTCHours()).padStart(2, '0');
+                const nextMinuteUTC = String(c.nextTime.getUTCMinutes()).padStart(2, '0');
+                const nextTimeStr = `${nextHourUTC}:${nextMinuteUTC}`;
+                
+                return `**${c.nombre.toUpperCase()}** - \`${nextTimeStr} HUB\` (<t:${unixTimestampNext}:R>)`;
+            }).join('\n');
+
+            // Si solo hay un match (o varios idénticos), el título es singular.
+            const title = closestCandidates.length > 1 
+                ? `🎯 ${closestCandidates.length} Graffitis Aparecen Muy Cerca`
+                : `➡️ Próximo Spawn cerca de la ventana de ${ventanaMinutos} min`;
+            
+            const embed = new EmbedBuilder()
+                .setColor("#2ecc71")
+                .setTitle(title)
+                .setDescription(`Estos son los graffitis de **${filtro.toUpperCase()}** que reaparecerán con una diferencia máxima de 2 minutos, dentro de la ventana de ${ventanaMinutos} minutos.`)
+                .addFields(
                     {
-                        name: "🕒 Aparece",
-                        value: `**${nextTimeStr} HUB** (<t:${unixTimestampNext}:R>)`,
+                        name: "Lista de Spawns Cercanos",
+                        value: listItems,
                         inline: false,
                     },
                     {
-                        name: "📅 Último Registro",
-                        value: `<t:${unixTimestampLast}:F>`,
-                        inline: false,
+                         name: "📅 Registro del Primer Match",
+                         value: `<t:${getUnixTimestampSec(bestMatch.lastTime)}:F>`,
+                         inline: false,
                     }
                 )
-                  .setFooter({ text: `Datos persistentes gracias a MongoDB` });
+                .setFooter({ text: `Datos persistentes gracias a MongoDB` });
 
-              await interaction.editReply({ embeds: [embed] });
+            await interaction.editReply({ embeds: [embed] });
 
-          } else {
-               const startWindow = new Date(now);
-               const endWindow = new Date(futureLimit);
+        } else {
+             // Si no hay candidatos dentro de la ventana, mostramos el mensaje original
+             const startWindow = new Date(now);
+             const endWindow = new Date(futureLimit);
 
-               await interaction.editReply({ 
-                   content: `⚠️ No se encontraron reapariciones para '${filtro}' entre las ${startWindow.toTimeString().substring(0, 5)} y las ${endWindow.toTimeString().substring(0, 5)} (UTC).`, 
-               });
-          }
-      } catch (error) {
-          console.error("Error en /nextgraff:", error);
-          await interaction.editReply("❌ Ocurrió un error al consultar la base de datos.");
-      }
-  }
+             await interaction.editReply({ 
+                 content: `⚠️ No se encontraron reapariciones para '${filtro}' entre las ${startWindow.toTimeString().substring(0, 5)} y las ${endWindow.toTimeString().substring(0, 5)} (UTC).`, 
+             });
+        }
+    } catch (error) {
+        console.error("Error en /nextgraff:", error);
+        await interaction.editReply("❌ Ocurrió un error al consultar la base de datos.");
+    }
+}
 
   // --- LÓGICA /GRAF ---
   else if (commandName === "graf") {
