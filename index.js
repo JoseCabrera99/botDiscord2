@@ -40,7 +40,6 @@ function calculateNextSpawn(lastTimestampMs) {
 
   // Si la hora de reaparición base ya pasó (nextSpawnDate < now), 
   // significa que el próximo spawn es 24 horas después (sumar 24 horas)
-  // Esto asegura que la reaparición siempre sea al menos 12 horas después Y en el futuro.
   if (nextSpawnDate < now) {
       nextSpawnDate.setTime(nextSpawnDate.getTime() + (24 * 60 * 60 * 1000));
   }
@@ -116,7 +115,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 })();
 
 // ---------------------------
-// Manejo del comando (SEPARADO POR BLOQUES)
+// Manejo del comando (MODIFICADO /setgraf)
 // ---------------------------
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -124,7 +123,7 @@ client.on("interactionCreate", async (interaction) => {
   const commandName = interaction.commandName;
   const horaStr = interaction.options.getString("hora"); 
 
-  // --- LÓGICA /SETGRAF (Toma el tiempo actual) ---
+  // --- LÓGICA /SETGRAF (MUESTRA HORA HUB HH:MM) ---
   if (commandName === "setgraf") {
       const nombre = interaction.options.getString("nombre").toLowerCase();
       
@@ -132,12 +131,15 @@ client.on("interactionCreate", async (interaction) => {
       const currentTimestampMs = Date.now();
       graffitiData[nombre] = currentTimestampMs;
       
-      // 2. Formato para la respuesta
+      // 2. EXTRAER LA HORA Y MINUTOS UTC (HH:MM)
       const date = new Date(currentTimestampMs);
-      const discordTimestampFull = `<t:${getUnixTimestampSec(date)}:F>`;
-
+      const hubHour = String(date.getUTCHours()).padStart(2, '0');
+      const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
+      const hubTimeStr = `${hubHour}:${hubMinute}`;
+      
+      // 3. Formato para la respuesta (Solicitado: ultimo spawn 03:09 HUB)
       return interaction.reply({ 
-          content: `✅ Graffiti **${nombre.toUpperCase()}** registrado.\nÚltimo spawn: ${discordTimestampFull} (UTC)`, 
+          content: `✅ Graffiti **${nombre.toUpperCase()}** registrado.\nÚltimo spawn **${hubTimeStr} HUB**`, 
           ephemeral: true 
       });
   }
@@ -225,11 +227,11 @@ client.on("interactionCreate", async (interaction) => {
 
   // --- LÓGICA /GRAF (TU CÓDIGO ORIGINAL SIN MODIFICACIONES) ---
   else if (commandName === "graf") {
-      const ubicacion = interaction.options.getString("ubicacion");
-      const horaStr = interaction.options.getString("hora"); 
-      const numero = interaction.options.getInteger("numero");
       
       // **TU LÓGICA DE VALIDACIÓN DE HORA ORIGINAL (RESTAURADA)**
+      if (!horaStr) { // Necesitas esta validación ya que 'hora' es requerida para /graf
+           return interaction.reply({ content: "Error: Falta la hora.", ephemeral: true });
+      }
       const match = horaStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
       if (!match) {
           return interaction.reply({
@@ -238,6 +240,8 @@ client.on("interactionCreate", async (interaction) => {
           });
       }
       
+      const ubicacion = interaction.options.getString("ubicacion");
+      const numero = interaction.options.getInteger("numero");
       const hora = parseInt(match[1]);
       const minutos = parseInt(match[2]);
 
@@ -245,7 +249,7 @@ client.on("interactionCreate", async (interaction) => {
       const baseDate = new Date(
           Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), hora, minutos)
       );
-      const baseTimestamp = getUnixTimestampSec(baseDate); // Usando la función ya definida
+      const baseTimestamp = getUnixTimestampSec(baseDate);
       const discordTimestampFull = `<t:${baseTimestamp}:F>`;
       
       const diffs = [12, 13, 14];
@@ -257,7 +261,7 @@ client.on("interactionCreate", async (interaction) => {
           const hubMinutos = String(newDate.getUTCMinutes()).padStart(2, "0");
           const hubStr = `${hubHora}:${hubMinutos}`;
           
-          const relativeTimestamp = `<t:${getUnixTimestampSec(newDate)}:R>`; // Usando la función ya definida
+          const relativeTimestamp = `<t:${getUnixTimestampSec(newDate)}:R>`;
           
           return { hub: hubStr, relative: relativeTimestamp, sum: sum };
       });
@@ -272,7 +276,7 @@ client.on("interactionCreate", async (interaction) => {
               {
                   name: "⏰ Próximos Posibles Horarios",
                   value: horariosPosibles.map((h) => 
-                      `${h.sum}> HUB (UTC): \`${h.hub}\` (${h.relative})`
+                      `${h.sum}h\n> HUB (UTC): \`${h.hub}\` (${h.relative})`
                   ).join("\n\n"),
                   inline: false,
               },
