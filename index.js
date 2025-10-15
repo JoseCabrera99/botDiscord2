@@ -157,8 +157,7 @@ client.on("interactionCreate", async (interaction) => {
 
   // --- LÓGICA /SETGRAF ---
   if (commandName === "setgraf") {
-      await interaction.deferReply({ ephemeral: true }); 
-      
+    await interaction.deferReply(); 
       const nombre = interaction.options.getString("nombre").toLowerCase();
       const currentTimestampMs = Date.now();
       
