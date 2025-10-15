@@ -100,14 +100,20 @@ const commands = [
       
   // 2. Comando /SETGRAF (AÑADE/ACTUALIZA LA HORA UTC EN LA DB)
   new SlashCommandBuilder()
-      .setName("setgraf")
-      .setDescription("Registra el spawn de un graffiti en el momento actual (UTC).")
-      .addStringOption((option) =>
-          option
-              .setName("nombre")
-              .setDescription("Nombre completo del punto de graffiti (ej: davis canales)")
-              .setRequired(true)
-      ),
+    .setName("setgraf")
+    .setDescription("Registra el spawn de un graffiti en el momento actual (UTC), con desfase opcional.")
+    .addStringOption((option) =>
+        option
+            .setName("nombre")
+            .setDescription("Nombre completo del punto de graffiti (ej: davis canales)")
+            .setRequired(true)
+    )
+    .addIntegerOption((option) => // <-- NUEVA OPCIÓN
+        option
+            .setName("desfase")
+            .setDescription("Minutos transcurridos desde que apareció (ej: 5)")
+            .setRequired(false) // <--- Opcional
+    ),
       
   // 3. Comando /NEXTGRAFF (BUSCA EN LA DB)
   new SlashCommandBuilder()
@@ -158,34 +164,51 @@ client.on("interactionCreate", async (interaction) => {
   // --- LÓGICA /SETGRAF ---
   if (commandName === "setgraf") {
     await interaction.deferReply(); 
-      const nombre = interaction.options.getString("nombre").toLowerCase();
-      const currentTimestampMs = Date.now();
-      
-      try {
-          // 1. Guardar/Actualizar el documento en la DB (Persistencia)
-          await Graffiti.findOneAndUpdate(
-              { nombre: nombre },
-              { lastSpawnTimestamp: currentTimestampMs },
-              { upsert: true, new: true } 
-          );
-          
-          // 2. EXTRAER LA HORA Y MINUTOS UTC (HH:MM) para la respuesta
-          const date = new Date(currentTimestampMs);
-          const hubHour = String(date.getUTCHours()).padStart(2, '0');
-          const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
-          const hubTimeStr = `${hubHour}:${hubMinute}`;
+    
+    const nombre = interaction.options.getString("nombre").toLowerCase();
+    // Lee el desfase. Si no se proporciona, es 0.
+    const desfase = interaction.options.getInteger("desfase") || 0; 
 
-          await interaction.editReply({ 
-              content: `✅ Graffiti **${nombre.toUpperCase()}** registrado.\nÚltimo spawn **${hubTimeStr} HUB**`
-          });
+    // Calcula el tiempo real del spawn restando el desfase
+    // 1 minuto = 60,000 milisegundos
+    const desfaseMs = desfase * 60 * 1000;
+    const actualTimestampMs = Date.now();
+    const spawnTimestampMs = actualTimestampMs - desfaseMs; // Tiempo de aparición real
+    
+    try {
+        // 1. Guardar/Actualizar el documento en la DB
+        await Graffiti.findOneAndUpdate(
+            { nombre: nombre },
+            { lastSpawnTimestamp: spawnTimestampMs }, // <-- USA EL TIEMPO AJUSTADO
+            { upsert: true, new: true } 
+        );
+        
+        // 2. EXTRAER LA HORA Y MINUTOS UTC del tiempo de aparición real
+        const date = new Date(spawnTimestampMs);
+        const hubHour = String(date.getUTCHours()).padStart(2, '0');
+        const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
+        const hubTimeStr = `${hubHour}:${hubMinute}`;
 
-      } catch (error) {
-          console.error("Error al registrar graffiti:", error);
-          await interaction.editReply({ 
-              content: `❌ Error al guardar el spawn de ${nombre}. Inténtalo de nuevo.`, 
-          });
-      }
-  }
+        let replyContent = `✅ Graffiti **${nombre.toUpperCase()}** registrado por ${interaction.user.tag}.\n`;
+        
+        if (desfase > 0) {
+            replyContent += `*(${desfase} min de desfase aplicados).* \n`;
+        }
+
+        replyContent += `Último spawn registrado: **${hubTimeStr} HUB**`;
+
+
+        await interaction.editReply({ 
+            content: replyContent
+        });
+
+    } catch (error) {
+        console.error("Error al registrar graffiti:", error);
+        await interaction.editReply({ 
+            content: `❌ Error al guardar el spawn de ${nombre}. Inténtalo de nuevo.`, 
+        });
+    }
+}
 
   // --- LÓGICA /NEXTGRAFF (LEE DE LA DB) ---
   else if (commandName === "nextgraff") {
@@ -291,7 +314,6 @@ client.on("interactionCreate", async (interaction) => {
                          inline: false,
                     }
                 )
-                .setFooter({ text: `Datos persistentes gracias a MongoDB` });
 
             await interaction.editReply({ embeds: [embed] });
 
