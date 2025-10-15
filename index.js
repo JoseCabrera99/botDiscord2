@@ -238,23 +238,26 @@ client.on("interactionCreate", async (interaction) => {
           if (bestMatch) {
               const unixTimestampNext = getUnixTimestampSec(bestMatch.nextTime);
               const unixTimestampLast = getUnixTimestampSec(bestMatch.lastTime);
+
+              const nextHourUTC = String(bestMatch.nextTime.getUTCHours()).padStart(2, '0');
+              const nextMinuteUTC = String(bestMatch.nextTime.getUTCMinutes()).padStart(2, '0');
+              const nextTimeStr = `${nextHourUTC}:${nextMinuteUTC}`;
               
               const embed = new EmbedBuilder()
                   .setColor("#2ecc71")
-                  .setTitle(`➡️ Próximo Spawn cerca de la ventana de ${ventanaMinutos} min`)
-                  .setDescription(`El graffiti **${bestMatch.nombre.toUpperCase()}** está más cerca de reaparecer en la ventana de búsqueda.`)
+                  .setTitle(`➡️ El graffiti **${bestMatch.nombre.toUpperCase()}** está más cerca de reaparecer dentro de ${ventanaMinutos}min `)
                   .addFields(
-                      {
-                          name: "🕒 Aparece",
-                          value: `HUB (UTC): <t:${unixTimestampNext}:T> (<t:${unixTimestampNext}:R>)`,
-                          inline: false,
-                      },
-                      {
-                          name: "📅 Último Registro",
-                          value: `<t:${unixTimestampLast}:F>`,
-                          inline: false,
-                      }
-                  )
+                    {
+                        name: "🕒 Aparece",
+                        value: `**${nextTimeStr} HUB** (<t:${unixTimestampNext}:R>)`,
+                        inline: false,
+                    },
+                    {
+                        name: "📅 Último Registro",
+                        value: `<t:${unixTimestampLast}:F>`,
+                        inline: false,
+                    }
+                )
                   .setFooter({ text: `Datos persistentes gracias a MongoDB` });
 
               await interaction.editReply({ embeds: [embed] });
