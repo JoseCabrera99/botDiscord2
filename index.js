@@ -18,7 +18,7 @@ dotenv.config();
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 // ----------------------------------------
-// ESQUEMA Y MODELO DE MONGOOSE (ACTUALIZADO)
+// ESQUEMA Y MODELO DE MONGOOSE 
 // ----------------------------------------
 
 // Definición de la estructura de un documento Graffiti
@@ -26,15 +26,13 @@ const GraffitiSchema = new mongoose.Schema({
     nombre: { 
         type: String, 
         required: true, 
-        // Ya no es único, puede cambiar con la actualización
     },
-    // NUEVO IDENTIFICADOR ÚNICO: El número del graffiti
+    // CAMBIO CLAVE: El número ahora es String para aceptar letras
     numero: { 
-        type: Number, 
+        type: String, 
         required: true, 
-        unique: true 
+        unique: true //  identificador único
     },
-    // Almacenamos el timestamp Unix en milisegundos
     lastSpawnTimestamp: { 
         type: Number, 
         required: true 
@@ -64,21 +62,14 @@ async function connectDB() {
 // FUNCIONES DE UTILIDAD
 // ----------------------------------------
 
-/**
-* Función de utilidad para obtener el timestamp Unix (en segundos)
-*/
 const getUnixTimestampSec = (date) => Math.floor(date.getTime() / 1000);
 
-/**
-* Calcula el próximo momento de aparición (+12h, ajustando si ya pasó).
-*/
 function calculateNextSpawn(lastTimestampMs) {
     const nextSpawnTimeMs = lastTimestampMs + (12 * 60 * 60 * 1000); 
     const nextSpawnDate = new Date(nextSpawnTimeMs);
     const now = new Date();
 
     if (nextSpawnDate < now) {
-        // Asume que si ya pasó, la próxima aparición es mañana a la misma hora
         nextSpawnDate.setTime(nextSpawnDate.getTime() + (24 * 60 * 60 * 1000));
     }
     
@@ -86,10 +77,10 @@ function calculateNextSpawn(lastTimestampMs) {
 }
 
 // ---------------------------
-// REGISTRO DE COMANDOS (ACTUALIZADO)
+// REGISTRO DE COMANDOS
 // ---------------------------
 const commands = [
-    // 1. Comando /GRAF (sin cambios)
+    // 1. Comando /GRAF
     new SlashCommandBuilder()
         .setName("graf")
         .setDescription("Crea un reporte de graffiti (sin persistencia)")
@@ -99,34 +90,34 @@ const commands = [
         .addStringOption((option) =>
             option.setName("hora").setDescription("Hora en formato 24h (ej: 20:05)").setRequired(true)
         )
-        .addIntegerOption((option) =>
+        .addStringOption((option) =>
             option.setName("numero").setDescription("Número identificador").setRequired(false)
         ),
         
-    // 2. Comando /SETGRAF (AÑADE/ACTUALIZA LA HORA UTC EN LA DB)
+    // 2. Comando /SETGRAF
     new SlashCommandBuilder()
         .setName("setgraf")
         .setDescription("Registra/Actualiza el spawn de un graffiti usando un número identificador.")
         .addStringOption((option) =>
             option
                 .setName("nombre")
-                .setDescription("Nombre del graffiti (ej: davis canales)")
+                .setDescription("Nombre del graffiti (ej: davis canales mostoles )")
                 .setRequired(true)
         )
-        .addIntegerOption((option) => // <-- NUEVO: Número REQUERIDO para identificar
+        .addStringOption((option) =>
             option
                 .setName("numero")
-                .setDescription("Número identificador único del graffiti.")
+                .setDescription("Número del graf.")
                 .setRequired(true) 
         )
-        .addIntegerOption((option) => // <-- Desfase OPCIONAL
+        .addIntegerOption((option) => 
             option
                 .setName("desfase")
                 .setDescription("Minutos transcurridos desde que apareció (ej: 5)")
                 .setRequired(false)
         ),
         
-    // 3. Comando /NEXTGRAFF (sin cambios en parámetros)
+    // 3. Comando /NEXTGRAFF
     new SlashCommandBuilder()
         .setName("nextgraff")
         .setDescription("Muestra el graffiti cuya reaparición está más cerca de la hora límite.")
@@ -152,7 +143,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
         await rest.put(
             Routes.applicationGuildCommands(
                 process.env.CLIENT_ID,
-                process.env.GUILD_ID // Usando la variable GUILD_ID para el servidor de prueba
+                process.env.GUILD_ID
             ),
             { body: commands }
         );
@@ -163,7 +154,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 })();
 
 // ---------------------------
-// MANEJO DE INTERACCIONES (ACTUALIZADO)
+// MANEJO DE INTERACCIONES
 // ---------------------------
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
@@ -171,12 +162,12 @@ client.on("interactionCreate", async (interaction) => {
     const commandName = interaction.commandName;
     const horaStr = interaction.options.getString("hora"); 
 
-    // --- LÓGICA /SETGRAF (ACTUALIZADO para usar número y nombre) ---
+    // --- LÓGICA /SETGRAF ---
     if (commandName === "setgraf") {
         await interaction.deferReply(); 
         
-        const nombre = interaction.options.getString("nombre"); // Nuevo nombre
-        const numero = interaction.options.getInteger("numero"); // Nuevo número (clave de búsqueda)
+        const nombre = interaction.options.getString("nombre");
+        const numero = interaction.options.getString("numero"); 
         const desfase = interaction.options.getInteger("desfase") || 0; 
 
         // Cálculo del tiempo de aparición real
@@ -185,23 +176,23 @@ client.on("interactionCreate", async (interaction) => {
         const spawnTimestampMs = actualTimestampMs - desfaseMs;
         
         try {
-            // 1. Guardar/Actualizar el documento en la DB, buscando por el NUMERO
+            // Buscamos y actualizamos por el NUMERO (String)
             await Graffiti.findOneAndUpdate(
-                { numero: numero }, // FILTRO DE BÚSQUEDA: DEBE COINCIDIR EL NÚMERO
+                { numero: numero }, 
                 { 
-                    nombre: nombre, // El nombre se actualiza siempre
+                    nombre: nombre, 
                     lastSpawnTimestamp: spawnTimestampMs 
                 }, 
-                { upsert: true, new: true } // Crea si no existe, actualiza si existe
+                { upsert: true, new: true } 
             );
             
-            // 2. EXTRAER LA HORA Y MINUTOS UTC del tiempo de aparición real
+            // ... (Cálculo de la hora HUB)
             const date = new Date(spawnTimestampMs);
             const hubHour = String(date.getUTCHours()).padStart(2, '0');
             const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
             const hubTimeStr = `${hubHour}:${hubMinute}`;
 
-            let replyContent = `✅ Graffiti **${nombre.toUpperCase()} (Nº ${numero})** registrado.\n`;
+            let replyContent = `✅ Graffiti **${nombre.toUpperCase()} (Nº ${numero})** registrado por ${interaction.user.tag}.\n`;
             
             if (desfase > 0) {
                 replyContent += `*(${desfase} min de desfase aplicados).* \n`;
@@ -221,7 +212,7 @@ client.on("interactionCreate", async (interaction) => {
         }
     }
 
-    // --- LÓGICA /NEXTGRAFF (ACTUALIZADO para mostrar número) ---
+    // --- LÓGICA /NEXTGRAFF ---
     else if (commandName === "nextgraff") {
         await interaction.deferReply(); 
         
@@ -237,7 +228,8 @@ client.on("interactionCreate", async (interaction) => {
         const PROXIMITY_LIMIT_MS = 2 * 60 * 1000; 
 
         try {
-            // 1. Obtener grafitis desde la DB
+            // ... (Búsqueda en la DB por nombre que comienza con el filtro)
+
             const allGraffiti = await Graffiti.find({ 
                 nombre: { $regex: '^' + filtro, $options: 'i' } 
             });
@@ -260,7 +252,7 @@ client.on("interactionCreate", async (interaction) => {
                     
                     const candidate = {
                         nombre: item.nombre,
-                        numero: item.numero, // Incluir el número
+                        numero: item.numero,
                         nextTime: nextSpawnDate,
                         nextTimeMs: nextSpawnTimeMs,
                         lastTime: new Date(lastTimestampMs),
@@ -283,7 +275,6 @@ client.on("interactionCreate", async (interaction) => {
                     return timeDifference <= PROXIMITY_LIMIT_MS;
                 });
                 
-                // Ordenar por tiempo de aparición ascendente
                 closestCandidates.sort((a, b) => a.nextTimeMs - b.nextTimeMs);
 
                 const listItems = closestCandidates.map(c => {
@@ -291,8 +282,7 @@ client.on("interactionCreate", async (interaction) => {
                     const nextHourUTC = String(c.nextTime.getUTCHours()).padStart(2, '0');
                     const nextMinuteUTC = String(c.nextTime.getUTCMinutes()).padStart(2, '0');
                     const nextTimeStr = `${nextHourUTC}:${nextMinuteUTC}`;
-                    
-                    // CAMBIO: Mostrar nombre y número
+
                     return `**Nº ${c.numero} | ${c.nombre.toUpperCase()}** - \`${nextTimeStr} HUB\` (<t:${unixTimestampNext}:R>)`;
                 }).join('\n');
 
@@ -334,7 +324,7 @@ client.on("interactionCreate", async (interaction) => {
         }
     }
 
-    // --- LÓGICA /GRAF (sin cambios) ---
+    // --- LÓGICA /GRAF ---
     else if (commandName === "graf") {
         
         if (!horaStr) { 
@@ -349,14 +339,16 @@ client.on("interactionCreate", async (interaction) => {
         }
         
         const ubicacion = interaction.options.getString("ubicacion");
-        const numero = interaction.options.getInteger("numero");
+        const numero = interaction.options.getString("numero"); 
         const hora = parseInt(match[1]);
         const minutos = parseInt(match[2]);
-
+        
         const today = new Date();
         const baseDate = new Date(
             Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), hora, minutos)
         );
+        const baseTimestamp = getUnixTimestampSec(baseDate);
+        const discordTimestampFull = `<t:${baseTimestamp}:F>`;
         
         const diffs = [12, 13, 14];
         const horariosPosibles = diffs.map((sum) => {
@@ -364,7 +356,7 @@ client.on("interactionCreate", async (interaction) => {
             newDate.setUTCHours(baseDate.getUTCHours() + sum);
             
             const hubHora = String(newDate.getUTCHours()).padStart(2, "0");
-            const hubMinutos = String(newDate.getUTCMintutes()).padStart(2, "0");
+            const hubMinutos = String(newDate.getUTCMinutes()).padStart(2, "0");
             const hubStr = `${hubHora}:${hubMinutos}`;
             
             const relativeTimestamp = `<t:${getUnixTimestampSec(newDate)}:R>`;
@@ -382,7 +374,7 @@ client.on("interactionCreate", async (interaction) => {
                 {
                     name: "⏰ Próximos Posibles Horarios",
                     value: horariosPosibles.map((h) => 
-                        `${h.sum}h\n> HUB (UTC): \`${h.hub}\` (${h.relative})`
+                        `**+${h.sum}h**\n> HUB (UTC): \`${h.hub}\` (${h.relative})`
                     ).join("\n\n"),
                     inline: false,
                 },
