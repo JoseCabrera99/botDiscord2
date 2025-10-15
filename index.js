@@ -136,7 +136,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
       await rest.put(
           Routes.applicationGuildCommands(
               process.env.CLIENT_ID,
-              "983070967385423922" 
+              process.env.GUILD_ID
           ),
           { body: commands }
       );
@@ -155,7 +155,7 @@ client.on("interactionCreate", async (interaction) => {
   const commandName = interaction.commandName;
   const horaStr = interaction.options.getString("hora"); 
 
-  // --- LÓGICA /SETGRAF (PERSISTENTE EN DB) ---
+  // --- LÓGICA /SETGRAF ---
   if (commandName === "setgraf") {
       await interaction.deferReply({ ephemeral: true }); 
       
@@ -274,7 +274,7 @@ client.on("interactionCreate", async (interaction) => {
       }
   }
 
-  // --- LÓGICA /GRAF (TU CÓDIGO ORIGINAL SIN PERSISTENCIA) ---
+  // --- LÓGICA /GRAF ---
   else if (commandName === "graf") {
       
       if (!horaStr) { 
@@ -343,7 +343,7 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ----------------------------------------
-// INICIO PRINCIPAL DE LA APLICACIÓN (CORREGIDO)
+// INICIO PRINCIPAL DE LA APLICACIÓN 
 // ----------------------------------------
 
 async function main() {
