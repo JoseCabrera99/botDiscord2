@@ -192,7 +192,7 @@ client.on("interactionCreate", async (interaction) => {
             const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
             const hubTimeStr = `${hubHour}:${hubMinute}`;
 
-            let replyContent = `✅ Graffiti **${nombre.toUpperCase()} (Nº ${numero})** registrado por ${interaction.user.tag}.\n`;
+            let replyContent = `✅ Graffiti **${nombre.toUpperCase()} (Nº ${numero})** registrado.\n`;
             
             if (desfase > 0) {
                 replyContent += `*(${desfase} min de desfase aplicados).* \n`;
