@@ -8,11 +8,17 @@ import {
 } from "discord.js";
 import dotenv from "dotenv";
 import express from 'express';
-import mongoose from "mongoose"; // <-- AÑADIDO: Importar Mongoose
+import mongoose from "mongoose"; // <-- Importar Mongoose
 dotenv.config();
 
 // ----------------------------------------
-// ESQUEMA Y MODELO DE MONGOOSE (NUEVO)
+// CONFIGURACIÓN DE DISCORD
+// ----------------------------------------
+
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+
+// ----------------------------------------
+// ESQUEMA Y MODELO DE MONGOOSE
 // ----------------------------------------
 
 // Definición de la estructura de un documento Graffiti
@@ -23,13 +29,12 @@ const GraffitiSchema = new mongoose.Schema({
       unique: true, 
       lowercase: true 
   },
-  // Almacenamos el timestamp Unix en milisegundos de la última vez que apareció.
+  // Almacenamos el timestamp Unix en milisegundos
   lastSpawnTimestamp: { 
       type: Number, 
       required: true 
   },
 }, {
-  // Opción para no incluir campos de fecha de creación/actualización automáticas
   timestamps: false 
 });
 
@@ -37,7 +42,7 @@ const GraffitiSchema = new mongoose.Schema({
 const Graffiti = mongoose.model('Graffiti', GraffitiSchema);
 
 // ----------------------------------------
-// CONEXIÓN A LA BASE DE DATOS (MODIFICADO)
+// CONEXIÓN A LA BASE DE DATOS
 // ----------------------------------------
 
 async function connectDB() {
@@ -46,25 +51,22 @@ async function connectDB() {
       console.log("✅ Conexión a MongoDB Atlas establecida.");
   } catch (error) {
       console.error("❌ Error al conectar a MongoDB:", error);
-      // El bot no debería iniciar si la DB falla.
+      // Si la conexión falla, se termina la aplicación.
       process.exit(1); 
   }
 }
 
 // ----------------------------------------
-// FUNCIONES DE UTILIDAD (MODIFICADO)
+// FUNCIONES DE UTILIDAD
 // ----------------------------------------
 
 /**
 * Función de utilidad para obtener el timestamp Unix (en segundos)
-* @param {Date} date - Objeto Date.
-* @returns {number} Timestamp Unix en segundos.
 */
 const getUnixTimestampSec = (date) => Math.floor(date.getTime() / 1000);
 
 /**
-* Calcula el próximo momento de aparición (en Date) para un punto.
-* (La lógica de cálculo sigue siendo la misma)
+* Calcula el próximo momento de aparición (+12h, ajustando si ya pasó).
 */
 function calculateNextSpawn(lastTimestampMs) {
   const nextSpawnTimeMs = lastTimestampMs + (12 * 60 * 60 * 1000); 
@@ -79,13 +81,13 @@ function calculateNextSpawn(lastTimestampMs) {
 }
 
 // ---------------------------
-// Registro de Comandos (SIN CAMBIOS)
+// REGISTRO DE COMANDOS
 // ---------------------------
 const commands = [
-  // 1. Comando /GRAF (Reporte original)
+  // 1. Comando /GRAF
   new SlashCommandBuilder()
       .setName("graf")
-      .setDescription("Crea un reporte de graffiti")
+      .setDescription("Crea un reporte de graffiti (sin persistencia)")
       .addStringOption((option) =>
           option.setName("ubicacion").setDescription("Ubicación del graff").setRequired(true)
       )
@@ -96,7 +98,7 @@ const commands = [
           option.setName("numero").setDescription("Número identificador").setRequired(false)
       ),
       
-  // 2. Comando /SETGRAF
+  // 2. Comando /SETGRAF (AÑADE/ACTUALIZA LA HORA UTC EN LA DB)
   new SlashCommandBuilder()
       .setName("setgraf")
       .setDescription("Registra el spawn de un graffiti en el momento actual (UTC).")
@@ -107,7 +109,7 @@ const commands = [
               .setRequired(true)
       ),
       
-  // 3. Comando /NEXTGRAFF
+  // 3. Comando /NEXTGRAFF (BUSCA EN LA DB)
   new SlashCommandBuilder()
       .setName("nextgraff")
       .setDescription("Muestra el graffiti cuya reaparición está más cerca de la hora límite.")
@@ -125,26 +127,27 @@ const commands = [
       ),
 ].map((command) => command.toJSON());
 
-// Registrar comandos (SIN CAMBIOS)
+// Registro de comandos en Discord (REST API)
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
 (async () => {
   try {
+      // ID de Guild Hardcodeado (asegúrate de que este es el ID de tu servidor de prueba)
       await rest.put(
           Routes.applicationGuildCommands(
               process.env.CLIENT_ID,
-              "983070967385423922"
+              "983070967385423922" 
           ),
           { body: commands }
       );
-      console.log("✅ Comandos actualizados.");
+      console.log("✅ Comandos de barra actualizados en Discord.");
   } catch (err) {
-      console.error(err);
+      console.error("Error al registrar comandos:", err);
   }
 })();
 
 // ---------------------------
-// Manejo de Interacciones (MODIFICADO)
+// MANEJO DE INTERACCIONES
 // ---------------------------
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -152,19 +155,19 @@ client.on("interactionCreate", async (interaction) => {
   const commandName = interaction.commandName;
   const horaStr = interaction.options.getString("hora"); 
 
-  // --- LÓGICA /SETGRAF (MODIFICADA PARA USAR DB) ---
+  // --- LÓGICA /SETGRAF (PERSISTENTE EN DB) ---
   if (commandName === "setgraf") {
-      await interaction.deferReply({ ephemeral: true }); // Deferir respuesta ya que la DB es lenta
+      await interaction.deferReply({ ephemeral: true }); 
       
       const nombre = interaction.options.getString("nombre").toLowerCase();
       const currentTimestampMs = Date.now();
       
       try {
-          // 1. Guardar/Actualizar el documento en la DB
+          // 1. Guardar/Actualizar el documento en la DB (Persistencia)
           await Graffiti.findOneAndUpdate(
               { nombre: nombre },
               { lastSpawnTimestamp: currentTimestampMs },
-              { upsert: true, new: true } // upsert: si no existe lo crea; new: devuelve el documento actualizado
+              { upsert: true, new: true } 
           );
           
           // 2. EXTRAER LA HORA Y MINUTOS UTC (HH:MM) para la respuesta
@@ -174,7 +177,7 @@ client.on("interactionCreate", async (interaction) => {
           const hubTimeStr = `${hubHour}:${hubMinute}`;
 
           await interaction.editReply({ 
-              content: `✅ Graffiti **${nombre.toUpperCase()}** registrado.\nÚltimo spawn **${hubTimeStr} HUB**`, 
+              content: `✅ Graffiti **${nombre.toUpperCase()}** registrado.\nÚltimo spawn **${hubTimeStr} HUB**`
           });
 
       } catch (error) {
@@ -185,9 +188,9 @@ client.on("interactionCreate", async (interaction) => {
       }
   }
 
-  // --- LÓGICA /NEXTGRAFF (MODIFICADA PARA USAR DB) ---
+  // --- LÓGICA /NEXTGRAFF (LEE DE LA DB) ---
   else if (commandName === "nextgraff") {
-      await interaction.deferReply(); // Deferir respuesta
+      await interaction.deferReply(); 
       
       const filtro = interaction.options.getString("filtro").toLowerCase();
       const ventanaMinutos = interaction.options.getInteger("ventana");
@@ -199,9 +202,9 @@ client.on("interactionCreate", async (interaction) => {
       let minDiffToLimit = Infinity; 
       
       try {
-          // 1. Obtener todos los grafitis que cumplen el filtro desde la DB
+          // 1. Obtener grafitis desde la DB
           const allGraffiti = await Graffiti.find({ 
-              nombre: { $regex: '^' + filtro, $options: 'i' } // Busca que el nombre empiece con el filtro
+              nombre: { $regex: '^' + filtro, $options: 'i' } 
           });
 
           if (allGraffiti.length === 0) {
@@ -214,14 +217,11 @@ client.on("interactionCreate", async (interaction) => {
           for (const item of allGraffiti) {
               const lastTimestampMs = item.lastSpawnTimestamp;
 
-              // Calcular la próxima hora de reaparición
               const nextSpawnDate = calculateNextSpawn(lastTimestampMs);
               const nextSpawnTimeMs = nextSpawnDate.getTime();
 
-              // Verificar si está dentro de la ventana de búsqueda
               if (nextSpawnTimeMs >= now && nextSpawnTimeMs <= futureLimit) {
                   
-                  // Encontrar el más cercano al LÍMITE (por debajo)
                   const diffToLimit = futureLimit - nextSpawnTimeMs; 
                   
                   if (diffToLimit < minDiffToLimit) {
@@ -274,7 +274,7 @@ client.on("interactionCreate", async (interaction) => {
       }
   }
 
-  // --- LÓGICA /GRAF (TU CÓDIGO ORIGINAL SIN MODIFICACIONES) ---
+  // --- LÓGICA /GRAF (TU CÓDIGO ORIGINAL SIN PERSISTENCIA) ---
   else if (commandName === "graf") {
       
       if (!horaStr) { 
@@ -343,16 +343,32 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ----------------------------------------
-// INICIO DEL BOT (MODIFICADO para conectar DB primero)
+// INICIO PRINCIPAL DE LA APLICACIÓN (CORREGIDO)
 // ----------------------------------------
 
-connectDB().then(() => {
-  client.login(process.env.TOKEN);
-});
+async function main() {
+  console.log("Iniciando Bot y Conexión...");
 
-const app = express();
+  // 1. Conectar a la base de datos
+  await connectDB();
+  
+  // 2. Iniciar sesión en Discord
+  await client.login(process.env.TOKEN);
+  console.log(`✅ Conectado como ${client.user.tag}`);
 
-app.get('/', (req, res) => res.send('Bot activo ✅'));
-app.listen(process.env.PORT || 3000, () => {
-  console.log(`Servidor web activo en el puerto ${process.env.PORT || 3000}`);
+  // 3. Iniciar el servidor Express (para el monitoreo 24/7)
+  const app = express();
+  app.get('/', (req, res) => res.send('Bot activo ✅'));
+  
+  const port = process.env.PORT || 3000; 
+
+  app.listen(port, () => {
+      console.log(`Servidor web Express activo en el puerto ${port}`);
+  });
+}
+
+// Ejecutar la función principal para iniciar la aplicación.
+main().catch(error => {
+  console.error("Error fatal al iniciar la aplicación:", error);
+  process.exit(1);
 });
