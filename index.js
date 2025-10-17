@@ -27,11 +27,10 @@ const GraffitiSchema = new mongoose.Schema({
         type: String, 
         required: true, 
     },
-    // CAMBIO CLAVE: El número ahora es String para aceptar letras
     numero: { 
         type: String, 
         required: true, 
-        unique: true //  identificador único
+        unique: true 
     },
     lastSpawnTimestamp: { 
         type: Number, 
@@ -64,16 +63,12 @@ async function connectDB() {
 
 const getUnixTimestampSec = (date) => Math.floor(date.getTime() / 1000);
 
+/**
+* Calcula el tiempo exacto 12 horas después del último registro (el tiempo de desbloqueo teórico).
+*/
 function calculateNextSpawn(lastTimestampMs) {
     const nextSpawnTimeMs = lastTimestampMs + (12 * 60 * 60 * 1000); 
-    const nextSpawnDate = new Date(nextSpawnTimeMs);
-    const now = new Date();
-
-    if (nextSpawnDate < now) {
-        nextSpawnDate.setTime(nextSpawnDate.getTime() + (24 * 60 * 60 * 1000));
-    }
-    
-    return nextSpawnDate;
+    return new Date(nextSpawnTimeMs);
 }
 
 // ---------------------------
@@ -120,17 +115,11 @@ const commands = [
     // 3. Comando /NEXTGRAFF
     new SlashCommandBuilder()
         .setName("nextgraff")
-        .setDescription("Muestra el graffiti cuya reaparición está más cerca de la hora límite.")
+        .setDescription("Muestra los grafitis cuyo tiempo de desbloqueo (+12h) ya ha pasado.")
         .addStringOption((option) =>
             option
                 .setName("filtro")
-                .setDescription("Texto con el que inicia el nombre (ej: davis, rancho)")
-                .setRequired(true)
-        )
-        .addIntegerOption((option) =>
-            option
-                .setName("ventana")
-                .setDescription("Tiempo en minutos para la ventana de búsqueda (ej: 20)")
+                .setDescription("Texto para buscar en el nombre (ej: davis, rancho)")
                 .setRequired(true)
         ),
 ].map((command) => command.toJSON());
@@ -176,7 +165,6 @@ client.on("interactionCreate", async (interaction) => {
         const spawnTimestampMs = actualTimestampMs - desfaseMs;
         
         try {
-            // Buscamos y actualizamos por el NUMERO (String)
             await Graffiti.findOneAndUpdate(
                 { numero: numero }, 
                 { 
@@ -186,13 +174,12 @@ client.on("interactionCreate", async (interaction) => {
                 { upsert: true, new: true } 
             );
             
-            // ... (Cálculo de la hora HUB)
             const date = new Date(spawnTimestampMs);
             const hubHour = String(date.getUTCHours()).padStart(2, '0');
             const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
             const hubTimeStr = `${hubHour}:${hubMinute}`;
 
-            let replyContent = `✅ Graffiti **${nombre.toUpperCase()} (Nº ${numero})** registrado.\n`;
+            let replyContent = `✅ Graffiti **${nombre.toUpperCase()} (Nº ${numero})** registrado por ${interaction.user.tag}.\n`;
             
             if (desfase > 0) {
                 replyContent += `*(${desfase} min de desfase aplicados).* \n`;
@@ -212,112 +199,80 @@ client.on("interactionCreate", async (interaction) => {
         }
     }
 
+    // ----------------------------------------------------
     // --- LÓGICA /NEXTGRAFF ---
+    // ----------------------------------------------------
     else if (commandName === "nextgraff") {
         await interaction.deferReply(); 
         
-        const filtro = interaction.options.getString("filtro").toLowerCase();
-        const ventanaMinutos = interaction.options.getInteger("ventana");
-
-        const now = Date.now();
-        const futureLimit = now + (ventanaMinutos * 60 * 1000); 
-
-        let bestMatch = null;
-        let minDiffToLimit = Infinity; 
-        const candidates = []; 
-        const PROXIMITY_LIMIT_MS = 2 * 60 * 1000; 
+        const filtro = interaction.options.getString("filtro");
+        const unlockedGraffitiMessages = [];
+        const nowMs = Date.now();
 
         try {
-            // ... (Búsqueda en la DB por nombre que comienza con el filtro)
-
+            // 1. Obtener grafitis que contienen el filtro
             const allGraffiti = await Graffiti.find({ 
-                nombre: { $regex: '^' + filtro, $options: 'i' } 
-            });
+                nombre: { $regex: filtro, $options: 'i' } 
+            }).sort({ numero: 1 }); 
 
             if (allGraffiti.length === 0) {
                 return interaction.editReply({ 
-                    content: `⚠️ No se encontraron grafitis que comiencen con **${filtro}** en la base de datos.`, 
+                    content: `⚠️ No se encontraron grafitis que contengan el nombre: **${filtro.toUpperCase()}** en la base de datos.`, 
                 });
             }
             
-            // 2. Iterar y encontrar todos los candidatos
+            // 2. Iterar, calcular el desbloqueo y aplicar el filtro
             for (const item of allGraffiti) {
-                const lastTimestampMs = item.lastSpawnTimestamp;
-
-                const nextSpawnDate = calculateNextSpawn(lastTimestampMs);
-                const nextSpawnTimeMs = nextSpawnDate.getTime();
-                const diffToLimit = futureLimit - nextSpawnTimeMs; 
-
-                if (nextSpawnTimeMs >= now && nextSpawnTimeMs <= futureLimit) {
-                    
-                    const candidate = {
-                        nombre: item.nombre,
-                        numero: item.numero,
-                        nextTime: nextSpawnDate,
-                        nextTimeMs: nextSpawnTimeMs,
-                        lastTime: new Date(lastTimestampMs),
-                        diffToLimit: diffToLimit
-                    };
-                    candidates.push(candidate);
-
-                    if (diffToLimit < minDiffToLimit) {
-                        minDiffToLimit = diffToLimit;
-                        bestMatch = candidate;
-                    }
+                const lastSpawnTimestampMs = item.lastSpawnTimestamp;
+                
+                // Cálculo del tiempo de desbloqueo (+12 horas)
+                const unlockDate = calculateNextSpawn(lastSpawnTimestampMs);
+                const unlockTimestampSec = getUnixTimestampSec(unlockDate);
+                
+                // ⚠️ FILTRO CLAVE: Solo si el tiempo de desbloqueo ya pasó
+                if (unlockDate.getTime() >= nowMs) {
+                    continue; 
                 }
+
+                // Conversión a segundos para Discord Timestamps
+                const registrationTimestampSec = getUnixTimestampSec(new Date(lastSpawnTimestampMs));
+                
+                // Hora UTC de Registro (para el texto plano)
+                const hubHour = String(new Date(lastSpawnTimestampMs).getUTCHours()).padStart(2, '0');
+                const hubMinute = String(new Date(lastSpawnTimestampMs).getUTCMinutes()).padStart(2, '0');
+                const hubTimeStr = `${hubHour}:${hubMinute}`;
+                
+                // Construcción del mensaje para un solo graffiti
+                const itemMessage = 
+                    `**Nº ${item.numero} | ${item.nombre.toUpperCase()}**\n` +
+                    `> Registrado: <t:${registrationTimestampSec}:F> (\`${hubTimeStr}\` HUB)\n` +
+                    `> Se desbloqueó: <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`;
+
+                unlockedGraffitiMessages.push(itemMessage);
             }
             
-            // 3. Procesar resultados
-            if (candidates.length > 0) {
-                
-                const closestCandidates = candidates.filter(c => {
-                    const timeDifference = Math.abs(c.nextTimeMs - bestMatch.nextTimeMs);
-                    return timeDifference <= PROXIMITY_LIMIT_MS;
-                });
-                
-                closestCandidates.sort((a, b) => a.nextTimeMs - b.nextTimeMs);
-
-                const listItems = closestCandidates.map(c => {
-                    const unixTimestampNext = getUnixTimestampSec(c.nextTime);
-                    const nextHourUTC = String(c.nextTime.getUTCHours()).padStart(2, '0');
-                    const nextMinuteUTC = String(c.nextTime.getUTCMinutes()).padStart(2, '0');
-                    const nextTimeStr = `${nextHourUTC}:${nextMinuteUTC}`;
-
-                    return `**Nº ${c.numero} | ${c.nombre.toUpperCase()}** - \`${nextTimeStr} HUB\` (<t:${unixTimestampNext}:R>)`;
-                }).join('\n');
-
-                const title = closestCandidates.length > 1 
-                    ? `🎯 ${closestCandidates.length} Graffitis Aparecen Muy Cerca`
-                    : `➡️ Próximo Spawn cerca de la ventana de ${ventanaMinutos} min`;
+            // 3. Enviar la respuesta usando un Embed
+            if (unlockedGraffitiMessages.length > 0) {
                 
                 const embed = new EmbedBuilder()
                     .setColor("#2ecc71")
-                    .setTitle(title)
-                    .setDescription(`Estos son los graffitis de **${filtro.toUpperCase()}** que reaparecerán con una diferencia máxima de 2 minutos, dentro de la ventana de ${ventanaMinutos} minutos.`)
-                    .addFields(
-                        {
-                            name: "Lista de Spawns Cercanos",
-                            value: listItems,
-                            inline: false,
-                        },
-                        {
-                             name: "📅 Último Registro del Primer Match",
-                             value: `<t:${getUnixTimestampSec(bestMatch.lastTime)}:F>`,
-                             inline: false,
-                        }
-                    )
-                    .setFooter({ text: `Datos persistentes gracias a MongoDB` });
+                    .setTitle(`🔓 Grafitis Desbloqueados para "${filtro.toUpperCase()}"`)
+                    .setDescription(`Se encontraron **${unlockedGraffitiMessages.length}** grafitis cuyo tiempo de desbloqueo (+12h) ya ha pasado y están listos.`)
+                    .addFields({
+                        name: "Detalle de Grafitis Desbloqueados",
+                        value: unlockedGraffitiMessages.join('\n\n').trim(),
+                        inline: false,
+                    })
+                    .setFooter({ text: `El tiempo relativo (ej: hace 2 horas) indica hace cuánto se desbloqueó.` });
 
                 await interaction.editReply({ embeds: [embed] });
 
             } else {
-                 const startWindow = new Date(now);
-                 const endWindow = new Date(futureLimit);
-
                  await interaction.editReply({ 
-                     content: `⚠️ No se encontraron reapariciones para '${filtro}' entre las ${startWindow.toTimeString().substring(0, 5)} y las ${endWindow.toTimeString().substring(0, 5)} (UTC).`, 
+                     content: `⚠️ No se encontraron grafitis que contengan el nombre **${filtro.toUpperCase()}** cuyo tiempo de desbloqueo (+12h) ya haya pasado. Todos están en cooldown.`, 
                  });
             }
+
         } catch (error) {
             console.error("Error en /nextgraff:", error);
             await interaction.editReply("❌ Ocurrió un error al consultar la base de datos.");
@@ -347,8 +302,6 @@ client.on("interactionCreate", async (interaction) => {
         const baseDate = new Date(
             Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), hora, minutos)
         );
-        const baseTimestamp = getUnixTimestampSec(baseDate);
-        const discordTimestampFull = `<t:${baseTimestamp}:F>`;
         
         const diffs = [12, 13, 14];
         const horariosPosibles = diffs.map((sum) => {
