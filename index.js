@@ -27,6 +27,7 @@ const GraffitiSchema = new mongoose.Schema({
         type: String, 
         required: true, 
     },
+    // CLAVE: número es String y es el identificador único
     numero: { 
         type: String, 
         required: true, 
@@ -67,12 +68,12 @@ const getUnixTimestampSec = (date) => Math.floor(date.getTime() / 1000);
 * Calcula el tiempo exacto 12 horas después del último registro (el tiempo de desbloqueo teórico).
 */
 function calculateNextSpawn(lastTimestampMs) {
-    const nextSpawnTimeMs = lastTimestampMs + (11 * 60 * 60 * 1000); 
+    const nextSpawnTimeMs = lastTimestampMs + (12 * 60 * 60 * 1000); 
     return new Date(nextSpawnTimeMs);
 }
 
 // ---------------------------
-// REGISTRO DE COMANDOS
+// REGISTRO DE COMANDOS 
 // ---------------------------
 const commands = [
     // 1. Comando /GRAF
@@ -115,7 +116,7 @@ const commands = [
     // 3. Comando /NEXTGRAFF
     new SlashCommandBuilder()
         .setName("nextgraff")
-        .setDescription("Muestra los grafitis cuyo tiempo de desbloqueo (+12h) ya ha pasado.")
+        .setDescription("Muestra grafitis con 11+ horas desde el registro (cerca de desbloquear).")
         .addStringOption((option) =>
             option
                 .setName("filtro")
@@ -200,7 +201,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     // ----------------------------------------------------
-    // --- LÓGICA /NEXTGRAFF ---
+    // --- LÓGICA /NEXTGRAFF---
     // ----------------------------------------------------
     else if (commandName === "nextgraff") {
         await interaction.deferReply(); 
@@ -208,6 +209,9 @@ client.on("interactionCreate", async (interaction) => {
         const filtro = interaction.options.getString("filtro");
         const unlockedGraffitiMessages = [];
         const nowMs = Date.now();
+        
+        // Constante para el filtro mínimo de 11 horas
+        const elevenHoursMs = 11 * 60 * 60 * 1000;
 
         try {
             // 1. Obtener grafitis que contienen el filtro
@@ -221,19 +225,22 @@ client.on("interactionCreate", async (interaction) => {
                 });
             }
             
-            // 2. Iterar, calcular el desbloqueo y aplicar el filtro
+            // 2. Iterar, calcular el desbloqueo y aplicar el filtro de 11h
             for (const item of allGraffiti) {
                 const lastSpawnTimestampMs = item.lastSpawnTimestamp;
                 
-                // Cálculo del tiempo de desbloqueo (+12 horas)
-                const unlockDate = calculateNextSpawn(lastSpawnTimestampMs);
-                const unlockTimestampSec = getUnixTimestampSec(unlockDate);
-                
-                // ⚠️ FILTRO CLAVE: Solo si el tiempo de desbloqueo ya pasó
-                if (unlockDate.getTime() >= nowMs) {
+                // Tiempo mínimo de registro necesario para ser listado
+                const minimumListTimeMs = lastSpawnTimestampMs + elevenHoursMs;
+
+                // ⚠️ FILTRO CLAVE: Solo si han pasado al menos 11 horas (o más)
+                if (nowMs < minimumListTimeMs) {
                     continue; 
                 }
 
+                // Cálculo del tiempo de desbloqueo (siempre 12 horas después)
+                const unlockDate = calculateNextSpawn(lastSpawnTimestampMs);
+                const unlockTimestampSec = getUnixTimestampSec(unlockDate);
+                
                 // Conversión a segundos para Discord Timestamps
                 const registrationTimestampSec = getUnixTimestampSec(new Date(lastSpawnTimestampMs));
                 
@@ -246,7 +253,7 @@ client.on("interactionCreate", async (interaction) => {
                 const itemMessage = 
                     `**Nº ${item.numero} | ${item.nombre.toUpperCase()}**\n` +
                     `> Registrado: <t:${registrationTimestampSec}:F> (\`${hubTimeStr}\` HUB)\n` +
-                    `> Se desbloqueó: <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`;
+                    `> Desbloqueo (12h): <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`;
 
                 unlockedGraffitiMessages.push(itemMessage);
             }
@@ -255,21 +262,21 @@ client.on("interactionCreate", async (interaction) => {
             if (unlockedGraffitiMessages.length > 0) {
                 
                 const embed = new EmbedBuilder()
-                    .setColor("#2ecc71")
-                    .setTitle(`🔓 Grafitis Desbloqueados para "${filtro.toUpperCase()}"`)
-                    .setDescription(`Se encontraron **${unlockedGraffitiMessages.length}** grafitis cuyo tiempo de desbloqueo (+12h) ya ha pasado y están listos.`)
+                    .setColor("#3498db")
+                    .setTitle(`⏳ Grafitis Cerca del Desbloqueo para "${filtro.toUpperCase()}"`)
+                    .setDescription(`Se encontraron **${unlockedGraffitiMessages.length}** grafitis que tienen **11 horas o más** desde su último registro.`)
                     .addFields({
-                        name: "Detalle de Grafitis Desbloqueados",
+                        name: "Detalle de Próxima Reaparición",
                         value: unlockedGraffitiMessages.join('\n\n').trim(),
                         inline: false,
                     })
-                    .setFooter({ text: `El tiempo relativo (ej: hace 2 horas) indica hace cuánto se desbloqueó.` });
+                    .setFooter({ text: `El Desbloqueo se calcula exactamente a +12h del registro.` });
 
                 await interaction.editReply({ embeds: [embed] });
 
             } else {
                  await interaction.editReply({ 
-                     content: `⚠️ No se encontraron grafitis que contengan el nombre **${filtro.toUpperCase()}** cuyo tiempo de desbloqueo (+12h) ya haya pasado. Todos están en cooldown.`, 
+                     content: `⚠️ No se encontraron grafitis para **${filtro.toUpperCase()}** que hayan pasado el umbral de 11 horas desde su registro.`, 
                  });
             }
 
@@ -279,7 +286,7 @@ client.on("interactionCreate", async (interaction) => {
         }
     }
 
-    // --- LÓGICA /GRAF ---
+    // --- LÓGICA /GRAF (sin cambios) ---
     else if (commandName === "graf") {
         
         if (!horaStr) { 
