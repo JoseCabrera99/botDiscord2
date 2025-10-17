@@ -67,7 +67,7 @@ const getUnixTimestampSec = (date) => Math.floor(date.getTime() / 1000);
 * Calcula el tiempo exacto 12 horas después del último registro (el tiempo de desbloqueo teórico).
 */
 function calculateNextSpawn(lastTimestampMs) {
-    const nextSpawnTimeMs = lastTimestampMs + (12 * 60 * 60 * 1000); 
+    const nextSpawnTimeMs = lastTimestampMs + (11 * 60 * 60 * 1000); 
     return new Date(nextSpawnTimeMs);
 }
 
