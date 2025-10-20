@@ -294,9 +294,6 @@ client.on("interactionCreate", async (interaction) => {
                     // Solo el primer embed lleva el título y el resumen
                     embed.setTitle(`⏳ Grafitis Cerca del Desbloqueo para "${filtro.toUpperCase()}"`)
                          .setTimestamp()
-                         .setFooter({ text: `Mostrando ${totalMatches} resultados en total. Desbloqueo: +12h. 🚨: < 5 mins.` }); // Se añade la leyenda
-                } else {
-                    embed.setTitle(`(Continuación) Resultados para "${filtro.toUpperCase()}"`);
                 }
                 
                 embedsToSend.push(embed);
