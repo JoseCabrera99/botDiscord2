@@ -207,11 +207,12 @@ client.on("interactionCreate", async (interaction) => {
         await interaction.deferReply(); 
         
         const filtro = interaction.options.getString("filtro");
-        const unlockedGraffitiMessages = [];
+        const allFilteredMessages = [];
         const nowMs = Date.now();
         
         // Constante para el filtro mínimo de 11 horas
         const elevenHoursMs = 11 * 60 * 60 * 1000;
+        const RESULTS_PER_FIELD = 10; 
 
         try {
             // 1. Obtener grafitis que contienen el filtro
@@ -255,38 +256,55 @@ client.on("interactionCreate", async (interaction) => {
                     `> Registrado: <t:${registrationTimestampSec}:F> (\`${hubTimeStr}\` HUB)\n` +
                     `> Desbloqueo (12h): <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`;
 
-                unlockedGraffitiMessages.push(itemMessage);
+                allFilteredMessages.push(itemMessage);
             }
             
-            // 3. Enviar la respuesta usando un Embed
-            if (unlockedGraffitiMessages.length > 0) {
-                
-                const embed = new EmbedBuilder()
-                    .setColor("#3498db")
-                    .setTitle(`⏳ Grafitis Cerca del Desbloqueo para "${filtro.toUpperCase()}"`)
-                    .setDescription(`Se encontraron **${unlockedGraffitiMessages.length}** grafitis que tienen **11 horas o más** desde su último registro.`)
-                    .addFields({
-                        name: "Detalle de Próxima Reaparición",
-                        value: unlockedGraffitiMessages.join('\n\n').trim(),
-                        inline: false,
-                    })
-                    .setFooter({ text: `El Desbloqueo se calcula exactamente a +12h del registro.` });
-
-                await interaction.editReply({ embeds: [embed] });
-
-            } else {
+            // 3. Procesar resultados y crear múltiples embeds
+            if (allFilteredMessages.length === 0) {
                  await interaction.editReply({ 
                      content: `⚠️ No se encontraron grafitis para **${filtro.toUpperCase()}** que hayan pasado el umbral de 11 horas desde su registro.`, 
                  });
+                 return;
+            }
+            
+            const totalMatches = allFilteredMessages.length;
+            const embedsToSend = [];
+            
+            // Dividir la lista de mensajes en bloques
+            for (let i = 0; i < totalMatches; i += RESULTS_PER_FIELD) {
+                const chunk = allFilteredMessages.slice(i, i + RESULTS_PER_FIELD);
+                const isFirstEmbed = i === 0;
+                
+                const embed = new EmbedBuilder()
+                    .setColor("#3498db")
+                    .setDescription(chunk.join('\n\n').trim());
+                
+                if (isFirstEmbed) {
+                    // Solo el primer embed lleva el título y el resumen
+                    embed.setTitle(`⏳ Grafitis Cerca del Desbloqueo para "${filtro.toUpperCase()}"`)
+                         .setTimestamp()
+                         .setFooter({ text: `Mostrando ${totalMatches} resultados en total. Desbloqueo: +12h.` });
+                } else {
+                    embed.setTitle(`(Continuación) Resultados para "${filtro.toUpperCase()}"`);
+                }
+                embed.addFields({
+                    name: isFirstEmbed ? `Resultados 1 - ${Math.min(i + RESULTS_PER_FIELD, totalMatches)}` : `Resultados ${i + 1} - ${Math.min(i + RESULTS_PER_FIELD, totalMatches)}`,
+                    value: chunk.join('\n\n').trim(),
+                    inline: false
+                });
+
+                embedsToSend.push(embed);
             }
 
+            // 4. Enviar los embeds
+            await interaction.editReply({ embeds: embedsToSend.slice(0, 10) });
         } catch (error) {
             console.error("Error en /nextgraff:", error);
             await interaction.editReply("❌ Ocurrió un error al consultar la base de datos.");
         }
     }
 
-    // --- LÓGICA /GRAF (sin cambios) ---
+    // --- LÓGICA /GRAF ---
     else if (commandName === "graf") {
         
         if (!horaStr) { 
