@@ -212,7 +212,7 @@ client.on("interactionCreate", async (interaction) => {
         
         // Constante para el filtro mínimo de 11 horas
         const elevenHoursMs = 11 * 60 * 60 * 1000;
-        const RESULTS_PER_FIELD = 10; 
+        const RESULTS_PER_FIELD = 5; 
 
         try {
             // 1. Obtener grafitis que contienen el filtro
