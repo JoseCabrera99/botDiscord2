@@ -201,7 +201,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     // ----------------------------------------------------
-    // --- LÓGICA /NEXTGRAFF (CORREGIDA) ---
+    // --- LÓGICA /NEXTGRAFF (CORREGIDA Y MEJORADA) ---
     // ----------------------------------------------------
     else if (commandName === "nextgraff") {
         await interaction.deferReply(); 
@@ -210,8 +210,10 @@ client.on("interactionCreate", async (interaction) => {
         const allFilteredMessages = [];
         const nowMs = Date.now();
         
-        // Constante para el filtro mínimo de 11 horas
+        // Constante para el filtro mínimo de 11 horas (para listar)
         const elevenHoursMs = 11 * 60 * 60 * 1000;
+        // Constante para el filtro de menos de 5 minutos (para resaltar)
+        const fiveMinutesMs = 5 * 60 * 1000; // 300,000 milisegundos
         const RESULTS_PER_FIELD = 5; 
 
         try {
@@ -230,19 +232,28 @@ client.on("interactionCreate", async (interaction) => {
             for (const item of allGraffiti) {
                 const lastSpawnTimestampMs = item.lastSpawnTimestamp;
                 
-                // Tiempo mínimo de registro necesario para ser listado
+                // Tiempo de desbloqueo teórico (12 horas después)
+                const unlockDate = calculateNextSpawn(lastSpawnTimestampMs);
+                const unlockTimestampMs = unlockDate.getTime();
+                
+                // Tiempo mínimo de registro necesario para ser listado (11 horas después)
                 const minimumListTimeMs = lastSpawnTimestampMs + elevenHoursMs;
 
                 // FILTRO CLAVE: Solo si han pasado al menos 11 horas (o más)
                 if (nowMs < minimumListTimeMs) {
                     continue; 
                 }
-
-                // Cálculo del tiempo de desbloqueo (siempre 12 horas después)
-                const unlockDate = calculateNextSpawn(lastSpawnTimestampMs);
-                const unlockTimestampSec = getUnixTimestampSec(unlockDate);
                 
+                // CÁLCULO PARA RESALTAR
+                const timeRemainingMs = unlockTimestampMs - nowMs;
+                const isVeryClose = timeRemainingMs <= fiveMinutesMs && timeRemainingMs > 0;
+                
+                // Formato de resaltado
+                const highlightEmoji = isVeryClose ? "🚨 " : "";
+                const highlightText = isVeryClose ? "**" : "";
+
                 // Conversión a segundos para Discord Timestamps
+                const unlockTimestampSec = getUnixTimestampSec(unlockDate);
                 const registrationTimestampSec = getUnixTimestampSec(new Date(lastSpawnTimestampMs));
                 
                 // Hora UTC de Registro (para el texto plano)
@@ -252,7 +263,7 @@ client.on("interactionCreate", async (interaction) => {
                 
                 // Construcción del mensaje para un solo graffiti
                 const itemMessage = 
-                    `**Nº ${item.numero} | ${item.nombre.toUpperCase()}**\n` +
+                    `${highlightEmoji}${highlightText}Nº ${item.numero} | ${item.nombre.toUpperCase()}${highlightText}\n` +
                     `> Registrado: <t:${registrationTimestampSec}:F> (\`${hubTimeStr}\` HUB)\n` +
                     `> Desbloqueo (12h): <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`;
 
@@ -283,11 +294,11 @@ client.on("interactionCreate", async (interaction) => {
                     // Solo el primer embed lleva el título y el resumen
                     embed.setTitle(`⏳ Grafitis Cerca del Desbloqueo para "${filtro.toUpperCase()}"`)
                          .setTimestamp()
-                         .setFooter({ text: `Mostrando ${totalMatches} resultados en total. Desbloqueo: +12h.` });
+                         .setFooter({ text: `Mostrando ${totalMatches} resultados en total. Desbloqueo: +12h. 🚨: < 5 mins.` }); // Se añade la leyenda
                 } else {
                     embed.setTitle(`(Continuación) Resultados para "${filtro.toUpperCase()}"`);
                 }
-
+                
                 embedsToSend.push(embed);
             }
 
