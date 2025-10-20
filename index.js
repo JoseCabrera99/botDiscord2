@@ -201,7 +201,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     // ----------------------------------------------------
-    // --- LÓGICA /NEXTGRAFF---
+    // --- LÓGICA /NEXTGRAFF (CORREGIDA) ---
     // ----------------------------------------------------
     else if (commandName === "nextgraff") {
         await interaction.deferReply(); 
@@ -233,7 +233,7 @@ client.on("interactionCreate", async (interaction) => {
                 // Tiempo mínimo de registro necesario para ser listado
                 const minimumListTimeMs = lastSpawnTimestampMs + elevenHoursMs;
 
-                // ⚠️ FILTRO CLAVE: Solo si han pasado al menos 11 horas (o más)
+                // FILTRO CLAVE: Solo si han pasado al menos 11 horas (o más)
                 if (nowMs < minimumListTimeMs) {
                     continue; 
                 }
@@ -287,11 +287,6 @@ client.on("interactionCreate", async (interaction) => {
                 } else {
                     embed.setTitle(`(Continuación) Resultados para "${filtro.toUpperCase()}"`);
                 }
-                embed.addFields({
-                    name: isFirstEmbed ? `Resultados 1 - ${Math.min(i + RESULTS_PER_FIELD, totalMatches)}` : `Resultados ${i + 1} - ${Math.min(i + RESULTS_PER_FIELD, totalMatches)}`,
-                    value: chunk.join('\n\n').trim(),
-                    inline: false
-                });
 
                 embedsToSend.push(embed);
             }
