@@ -201,7 +201,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     // ----------------------------------------------------
-    // --- LÓGICA /NEXTGRAFF (CORREGIDA Y MEJORADA) ---
+    // --- LÓGICA /NEXTGRAFF ---
     // ----------------------------------------------------
     else if (commandName === "nextgraff") {
         await interaction.deferReply(); 
@@ -209,11 +209,9 @@ client.on("interactionCreate", async (interaction) => {
         const filtro = interaction.options.getString("filtro");
         const allFilteredMessages = [];
         const nowMs = Date.now();
-        
-        // Constante para el filtro mínimo de 11 horas (para listar)
+        const nowMinutes = new Date(nowMs).getUTCMinutes();
         const elevenHoursMs = 11 * 60 * 60 * 1000;
-        // Constante para el filtro de menos de 5 minutos (para resaltar)
-        const fiveMinutesMs = 5 * 60 * 1000; // 300,000 milisegundos
+        const fiveMinutes = 5; 
         const RESULTS_PER_FIELD = 5; 
 
         try {
@@ -234,19 +232,24 @@ client.on("interactionCreate", async (interaction) => {
                 
                 // Tiempo de desbloqueo teórico (12 horas después)
                 const unlockDate = calculateNextSpawn(lastSpawnTimestampMs);
-                const unlockTimestampMs = unlockDate.getTime();
                 
                 // Tiempo mínimo de registro necesario para ser listado (11 horas después)
                 const minimumListTimeMs = lastSpawnTimestampMs + elevenHoursMs;
 
-                // FILTRO CLAVE: Solo si han pasado al menos 11 horas (o más)
+                // FILTRO 1 (LISTADO): Solo si han pasado al menos 11 horas (o más)
                 if (nowMs < minimumListTimeMs) {
                     continue; 
                 }
                 
-                // CÁLCULO PARA RESALTAR
-                const timeRemainingMs = unlockTimestampMs - nowMs;
-                const isVeryClose = timeRemainingMs <= fiveMinutesMs && timeRemainingMs > 0;
+                const unlockMinutes = unlockDate.getUTCMinutes(); // Minuto de desbloqueo (MM)
+                
+                let isVeryClose = false;
+                let minutesDifference = (nowMinutes - unlockMinutes + 60) % 60; 
+                
+                // Se resalta si la diferencia de minutos es entre 0 (minuto exacto) y 5 (5 minutos después)
+                if (minutesDifference >= 0 && minutesDifference <= fiveMinutes) {
+                    isVeryClose = true;
+                }
                 
                 // Formato de resaltado
                 const highlightEmoji = isVeryClose ? "🚨 " : "";
