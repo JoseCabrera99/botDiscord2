@@ -113,15 +113,21 @@ const commands = [
                 .setRequired(false)
         ),
         
-    // 3. Comando /NEXTGRAFF
+    // 3. Comando /NEXTGRAFF (Actualizado)
     new SlashCommandBuilder()
         .setName("nextgraff")
-        .setDescription("Muestra grafitis con 11+ horas desde el registro (cerca de desbloquear).")
+        .setDescription("Muestra grafitis cerca de desbloquear, simulando una hora futura.")
         .addStringOption((option) =>
             option
                 .setName("filtro")
                 .setDescription("Texto para buscar en el nombre (ej: davis, rancho)")
                 .setRequired(true)
+        )
+        .addIntegerOption((option) =>
+            option
+                .setName("minutos")
+                .setDescription("Minutos a añadir a la hora actual (ej: 8)")
+                .setRequired(true) // Hacemos minutos requerido
         ),
 ].map((command) => command.toJSON());
 
@@ -201,21 +207,33 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     // ----------------------------------------------------
-    // --- LÓGICA /NEXTGRAFF ---
+    // --- LÓGICA /NEXTGRAFF (ACTUALIZADA Y CORREGIDA) ---
     // ----------------------------------------------------
     else if (commandName === "nextgraff") {
         await interaction.deferReply(); 
         
         const filtro = interaction.options.getString("filtro");
+        const minutesToAdd = interaction.options.getInteger("minutos"); // Minutos a sumar
         const allFilteredMessages = [];
         const nowMs = Date.now();
-        const nowMinutes = new Date(nowMs).getUTCMinutes();
+        
+        // 1. Calcular el Minuto Objetivo (Minuto de la hora FUTURA)
+        const futureDateMs = nowMs + (minutesToAdd * 60 * 1000);
+        const futureDate = new Date(futureDateMs);
+        const targetMinutes = futureDate.getUTCMinutes(); // Minuto MM de la hora FUTURA
+        const targetHours = futureDate.getUTCHours(); // Hora HH de la hora FUTURA
+
+        // Formato para el título
+        const targetTimeStr = `${String(targetHours).padStart(2, '0')}:${String(targetMinutes).padStart(2, '0')}`;
+        
+        // Constante para el filtro mínimo de 11 horas (para listar)
         const elevenHoursMs = 11 * 60 * 60 * 1000;
-        const fiveMinutes = 5; 
+        // Constante para la ventana de proximidad (5 minutos ANTES del minuto objetivo)
+        const fiveMinutesBefore = 5; 
         const RESULTS_PER_FIELD = 5; 
 
         try {
-            // 1. Obtener grafitis que contienen el filtro
+            // 2. Obtener grafitis que contienen el filtro
             const allGraffiti = await Graffiti.find({ 
                 nombre: { $regex: filtro, $options: 'i' } 
             }).sort({ numero: 1 }); 
@@ -226,28 +244,25 @@ client.on("interactionCreate", async (interaction) => {
                 });
             }
             
-            // 2. Iterar, calcular el desbloqueo y aplicar el filtro de 11h
+            // 3. Iterar y aplicar filtros
             for (const item of allGraffiti) {
                 const lastSpawnTimestampMs = item.lastSpawnTimestamp;
                 
                 // Tiempo de desbloqueo teórico (12 horas después)
                 const unlockDate = calculateNextSpawn(lastSpawnTimestampMs);
                 
-                // Tiempo mínimo de registro necesario para ser listado (11 horas después)
-                const minimumListTimeMs = lastSpawnTimestampMs + elevenHoursMs;
-
-                // FILTRO 1 (LISTADO): Solo si han pasado al menos 11 horas (o más)
-                if (nowMs < minimumListTimeMs) {
+                // FILTRO LISTADO: Solo si han pasado al menos 11 horas (o más)
+                if (nowMs < (lastSpawnTimestampMs + elevenHoursMs)) {
                     continue; 
                 }
                 
-                const unlockMinutes = unlockDate.getUTCMinutes(); // Minuto de desbloqueo (MM)
+                // CÁLCULO PARA RESALTAR 
+                const unlockMinutes = unlockDate.getUTCMinutes(); // Minuto MM de desbloqueo
                 
                 let isVeryClose = false;
-                let minutesDifference = (nowMinutes - unlockMinutes + 60) % 60; 
-                
-                // Se resalta si la diferencia de minutos es entre 0 (minuto exacto) y 5 (5 minutos después)
-                if (minutesDifference >= 0 && minutesDifference <= fiveMinutes) {
+                let difference = (targetMinutes - unlockMinutes + 60) % 60;
+            
+                if (difference >= 0 && difference <= fiveMinutesBefore) {
                     isVeryClose = true;
                 }
                 
@@ -273,7 +288,7 @@ client.on("interactionCreate", async (interaction) => {
                 allFilteredMessages.push(itemMessage);
             }
             
-            // 3. Procesar resultados y crear múltiples embeds
+            // 4. Procesar resultados y crear múltiples embeds
             if (allFilteredMessages.length === 0) {
                  await interaction.editReply({ 
                      content: `⚠️ No se encontraron grafitis para **${filtro.toUpperCase()}** que hayan pasado el umbral de 11 horas desde su registro.`, 
@@ -294,15 +309,15 @@ client.on("interactionCreate", async (interaction) => {
                     .setDescription(chunk.join('\n\n').trim());
                 
                 if (isFirstEmbed) {
-                    // Solo el primer embed lleva el título y el resumen
-                    embed.setTitle(`⏳ Grafitis Cerca del Desbloqueo para "${filtro.toUpperCase()}"`)
+                    // Título con la hora futura calculada
+                    embed.setTitle(`⏳ Grafitis Cerca del Desbloqueo para "${filtro.toUpperCase()}" | Objetivo: ${targetTimeStr} HUB`)
                          .setTimestamp()
-                }
+                } 
                 
                 embedsToSend.push(embed);
             }
 
-            // 4. Enviar los embeds
+            // 5. Enviar los embeds
             await interaction.editReply({ embeds: embedsToSend.slice(0, 10) });
         } catch (error) {
             console.error("Error en /nextgraff:", error);
