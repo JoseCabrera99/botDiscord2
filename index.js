@@ -19,13 +19,15 @@ dotenv.config();
 // CONFIGURACIÓN DE DISCORD
 // ----------------------------------------
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
+// Se añade GuildMessages para interactividad de botones
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] }); 
 const ALERT_CHANNEL_ID = process.env.ALERT_CHANNEL_ID; 
 
 // ----------------------------------------
 // ESQUEMA Y MODELO DE MONGOOSE 
 // ----------------------------------------
 
+// rescheduleCount (0, 1, 2, 3 -> para +12h, +13h, +14h, +15h)
 const GraffitiSchema = new mongoose.Schema({
     nombre: { 
         type: String, 
@@ -79,7 +81,7 @@ function calculateNextSpawn(lastTimestampMs, offsetHours = 12) {
 }
 
 // ----------------------------------------
-// TAREA PROGRAMADA DE AVISO (CORREGIDA)
+// TAREA PROGRAMADA DE AVISO (CORREGIDA PARA CACHÉ)
 // ----------------------------------------
 
 async function checkGraffitiAlerts() {
@@ -94,10 +96,17 @@ async function checkGraffitiAlerts() {
     const twelveHoursMs = 12 * 60 * 60 * 1000;
     const oneHourMs = 60 * 60 * 1000;
 
-    const targetChannel = client.channels.cache.get(ALERT_CHANNEL_ID); 
+    let targetChannel;
+    try {
+        // CORRECCIÓN DE CACHÉ: Usamos fetch() para asegurar que obtenemos el canal
+        targetChannel = await client.channels.fetch(ALERT_CHANNEL_ID); 
+    } catch (error) {
+        console.error(`❌ Error al intentar obtener el canal ${ALERT_CHANNEL_ID}:`, error.message);
+        return; 
+    }
     
     if (!targetChannel) {
-        console.error(`❌ Canal de alertas con ID ${ALERT_CHANNEL_ID} no encontrado en cache.`);
+        console.error(`❌ Canal de alertas con ID ${ALERT_CHANNEL_ID} no encontrado después de fetch.`);
         return; 
     }
 
@@ -109,9 +118,9 @@ async function checkGraffitiAlerts() {
             const rescheduleCount = item.rescheduleCount || 0;
             
             // Calculamos el tiempo de desbloqueo usando el offset
-            // +12h + (rescheduleCount * 1h) -> +12h, +13h, +14h, +15h
             const offsetMs = rescheduleCount * oneHourMs;
             const unlockTimeMs = item.lastSpawnTimestamp + twelveHoursMs + offsetMs; 
+            const offsetHours = 12 + rescheduleCount;
 
             // Condición de aviso: El desbloqueo ocurre en el rango [Ahora + 10m, Ahora + 11m]
             if (unlockTimeMs > (nowMs + tenMinutesMs) && unlockTimeMs <= (nowMs + elevenMinutesMs)) {
@@ -123,7 +132,7 @@ async function checkGraffitiAlerts() {
                 
                 alertsToSend.push({
                     item: item,
-                    offsetHours: 12 + rescheduleCount, // Para mostrar en el embed: 12h, 13h, etc.
+                    offsetHours: offsetHours, 
                     unlockTime: `<t:${unlockTimestampSec}:t>`,
                     unlockRelative: `<t:${unlockTimestampSec}:R>`,
                 });
@@ -135,7 +144,8 @@ async function checkGraffitiAlerts() {
             for (const alert of alertsToSend) {
                 const item = alert.item;
                 const rescheduleCount = item.rescheduleCount || 0;
-                const isMaxed = rescheduleCount >= 3; // Límite (+15h)
+                // El límite para el contador es 3, que corresponde a +15h
+                const isMaxed = rescheduleCount >= 3; 
                 
                 const description = 
                     `**Nº ${item.numero} | ${item.nombre.toUpperCase()}**\n` +
@@ -144,17 +154,19 @@ async function checkGraffitiAlerts() {
 
                 const embed = new EmbedBuilder()
                     .setColor("#f1c40f")
-                    .setTitle(`🚨 ¡AVISO DE DESBLOQUEO DE GRAFFITIS! (${alert.offsetHours}h) 🚨`)
+                    .setTitle(`🚨 ¡AVISO DE DESBLOQUEO DE GRAFFITIS! (+${alert.offsetHours}h) 🚨`)
                     .setDescription(description)
                     .setTimestamp();
                 
                 // Creación de los botones
+                const nextCountDisplay = rescheduleCount + 1;
                 const oneHourButton = new ButtonBuilder()
                     // Custom ID: 'reschedule_numeroDelGraf_rescheduleCount'
                     .setCustomId(`reschedule_${item.numero}_${rescheduleCount}`)
-                    .setLabel(`+1 hora (${rescheduleCount + 1}/4)`) // Muestra el contador
+                    // Muestra el progreso (1/4 es para +13h, 4/4 es para +15h)
+                    .setLabel(`+1 hora (${nextCountDisplay}/4)`) 
                     .setStyle(ButtonStyle.Secondary)
-                    .setDisabled(isMaxed); // Deshabilita si se alcanzó el límite
+                    .setDisabled(isMaxed);
 
                 const timearButton = new ButtonBuilder()
                     .setCustomId(`timear_${item.numero}`)
@@ -182,7 +194,6 @@ async function checkGraffitiAlerts() {
 // REGISTRO DE COMANDOS 
 // ---------------------------
 const commands = [
-    // 1. Comando /GRAF
     new SlashCommandBuilder()
         .setName("graf")
         .setDescription("Crea un reporte de graffiti (sin persistencia)")
@@ -196,7 +207,6 @@ const commands = [
             option.setName("numero").setDescription("Número identificador").setRequired(false)
         ),
         
-    // 2. Comando /SETGRAF
     new SlashCommandBuilder()
         .setName("setgraf")
         .setDescription("Registra/Actualiza el spawn de un graffiti usando un número identificador.")
@@ -219,7 +229,6 @@ const commands = [
                 .setRequired(false)
         ),
         
-    // 3. Comando /NEXTGRAFF 
     new SlashCommandBuilder()
         .setName("nextgraff")
         .setDescription("Muestra grafitis cerca de desbloquear, simulando una hora futura.")
@@ -237,7 +246,6 @@ const commands = [
         ),
 ].map((command) => command.toJSON());
 
-// Registro de comandos en Discord (REST API)
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
 (async () => {
@@ -256,11 +264,10 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 })();
 
 // ---------------------------
-// MANEJO DE INTERACCIONES (ACTUALIZADO)
+// MANEJO DE INTERACCIONES
 // ---------------------------
 client.on("interactionCreate", async (interaction) => {
     
-    // Manejar comandos slash existentes
     if (interaction.isChatInputCommand()) {
         const commandName = interaction.commandName;
         const horaStr = interaction.options.getString("hora"); 
@@ -278,7 +285,7 @@ client.on("interactionCreate", async (interaction) => {
             const spawnTimestampMs = actualTimestampMs - desfaseMs;
             
             try {
-                // Se resetea rescheduleCount a 0
+                // Se resetea rescheduleCount a 0 al registrar un nuevo spawn
                 await Graffiti.findOneAndUpdate(
                     { numero: numero }, 
                     { 
@@ -314,9 +321,10 @@ client.on("interactionCreate", async (interaction) => {
             }
         }
 
-        // --- LÓGICA /NEXTGRAFF  ---
+        // --- LÓGICA /NEXTGRAFF ---
         else if (commandName === "nextgraff") {
             await interaction.deferReply(); 
+    
             const filtro = interaction.options.getString("filtro");
             const minutesToAdd = interaction.options.getInteger("minutos"); 
             const allFilteredMessages = [];
@@ -347,8 +355,7 @@ client.on("interactionCreate", async (interaction) => {
                 for (const item of allGraffiti) {
                     const lastSpawnTimestampMs = item.lastSpawnTimestamp;
                     
-                    // Aquí usamos solo 12h como referencia (el comando /nextgraf es para simular)
-                    const unlockDate = calculateNextSpawn(lastSpawnTimestampMs, 12);
+                    const unlockDate = calculateNextSpawn(lastSpawnTimestampMs, 12); // Usar 12h para simulación
                     
                     if (nowMs < (lastSpawnTimestampMs + elevenHoursMs)) {
                         continue; 
@@ -438,7 +445,7 @@ client.on("interactionCreate", async (interaction) => {
                 Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), hora, minutos)
             );
             
-            const diffs = [12, 13, 14, 15]; // Se añade +15h
+            const diffs = [12, 13, 14, 15]; // Rango de desbloqueo completo
             const horariosPosibles = diffs.map((sum) => {
                 const newDate = new Date(baseDate.getTime());
                 newDate.setUTCHours(baseDate.getUTCHours() + sum);
@@ -460,7 +467,7 @@ client.on("interactionCreate", async (interaction) => {
                 )
                 .addFields(
                     {
-                        name: "⏰ Próximos Posibles Horarios (12h a 15h)", // Se actualiza el texto
+                        name: "⏰ Próximos Posibles Horarios (12h a 15h)",
                         value: horariosPosibles.map((h) => 
                             `**+${h.sum}h**\n> HUB (UTC): \`${h.hub}\` (${h.relative})`
                         ).join("\n\n"),
@@ -484,14 +491,15 @@ client.on("interactionCreate", async (interaction) => {
 
         try {
             // ------------------------------------
-            // LÓGICA BOTÓN "1 hora +" (Reschedule/Offset)
+            // LÓGICA BOTÓN "1 hora +" (Desplazar Offset)
             // ------------------------------------
             if (action === 'reschedule') {
                 const currentCount = parseInt(countStr);
                 const newCount = currentCount + 1;
-                const isMaxed = newCount >= 3; // límite  (+15h)
+                // El límite de 3 (para llegar a +15h)
+                const isMaxed = newCount >= 3; 
                 
-                // 1. Actualizar la BD (contador de reschedules)
+                // 1. Actualizar la BD (solo incrementamos el contador)
                 const updatedGraffiti = await Graffiti.findOneAndUpdate(
                     { numero: numero },
                     { $inc: { rescheduleCount: 1 } },
@@ -500,7 +508,8 @@ client.on("interactionCreate", async (interaction) => {
 
                 if (updatedGraffiti) {
                     const offsetHours = 12 + newCount;
-                    const newUnlockDate = calculateNextSpawn(updatedGraffiti.lastSpawnTimestamp, offsetHours);
+                    // El nuevo desbloqueo se calcula con el offset actualizado
+                    const newUnlockDate = calculateNextSpawn(updatedGraffiti.lastSpawnTimestamp, offsetHours); 
                     const newUnlockTimestampSec = getUnixTimestampSec(newUnlockDate);
                     
                     // 2. Modificar el mensaje (Embed y Botones)
@@ -509,10 +518,10 @@ client.on("interactionCreate", async (interaction) => {
                         .setDescription(
                             `**Nº ${numero} | ${updatedGraffiti.nombre.toUpperCase()}**\n` +
                             `> Offset: **+${offsetHours}h** (actual)\n` +
-                            `> Nuevo Desbloqueo (12h): <t:${newUnlockTimestampSec}:t> **(<t:${newUnlockTimestampSec}:R>)**` +
+                            `> Nuevo Desbloqueo: <t:${newUnlockTimestampSec}:t> **(<t:${newUnlockTimestampSec}:R>)**` +
                             (isMaxed ? '\n\n**⚠️ Límite de pospuestos (+15h) alcanzado.**' : '')
                         )
-                        .setColor("#e67e22"); // Naranja
+                        .setColor("#e67e22"); 
 
                     // 3. Modificar la fila de botones
                     const nextCountDisplay = newCount + 1;
@@ -539,12 +548,12 @@ client.on("interactionCreate", async (interaction) => {
             } 
             
             // ------------------------------------
-            // LÓGICA BOTÓN "Timear"
+            // LÓGICA BOTÓN "Timear" (Reinicia el ciclo)
             // ------------------------------------
             else if (action === 'timear') {
                 const nowTimestampMs = Date.now();
 
-                // 1. Actualizar la BD
+                // 1. Actualizar la BD (se actualiza el spawn y se resetea el contador)
                 const updatedGraffiti = await Graffiti.findOneAndUpdate(
                     { numero: numero },
                     { 
@@ -601,7 +610,6 @@ client.on("interactionCreate", async (interaction) => {
     }
 });
 
-
 // ----------------------------------------
 // INICIO PRINCIPAL DE LA APLICACIÓN 
 // ----------------------------------------
@@ -613,12 +621,15 @@ async function main() {
     
     await client.login(process.env.TOKEN);
     console.log(`✅ Conectado como ${client.user.tag}`);
-
-    // --- INICIAR EL TEMPORIZADOR DE AVISOS ---
-    checkGraffitiAlerts();
-    setInterval(checkGraffitiAlerts, 60 * 1000); 
-    console.log(`✅ Tarea de verificación de alertas iniciada (cada 1 minuto).`);
-    // ----------------------------------------
+    
+    // CORRECCIÓN: Iniciar el temporizador SÓLO cuando el cliente esté listo (evita errores de caché)
+    client.once('ready', () => {
+        console.log(`✅ Bot ${client.user.tag} está listo y en línea.`);
+        
+        checkGraffitiAlerts();
+        setInterval(checkGraffitiAlerts, 60 * 1000); 
+        console.log(`✅ Tarea de verificación de alertas iniciada (cada 1 minuto).`);
+    });
 
     const app = express();
     app.get('/', (req, res) => res.send('Bot activo ✅'));
