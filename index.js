@@ -14,6 +14,21 @@ import dotenv from "dotenv";
 import express from 'express';
 import mongoose from "mongoose"; 
 dotenv.config();
+// ----------------------------------------
+// Imagenes del graff
+// ----------------------------------------
+
+const GRAFFITI_IMAGES = {
+    "3": "https://imgur.com/a/BwuCZIY", 
+    "4": "https://imgur.com/a/v73smY2",
+    "5": "https://imgur.com/a/5lxG4MH",
+    "6": "https://imgur.com/a/LqhITsZ",
+    "7": "https://imgur.com/a/M9Sfm8x",
+    "8": "https://imgur.com/a/SoAOCXo",
+    "9": "https://imgur.com/a/yqlZQCR",
+    "10": "https://imgur.com/a/YzsL5LZ",
+    "11": "https://imgur.com/a/TTvPoNJ",
+};
 
 // ----------------------------------------
 // CONFIGURACIÓN DE DISCORD
@@ -107,7 +122,6 @@ async function checkGraffitiAlerts() {
 
     let targetChannel;
     try {
-        // CORRECCIÓN DE CACHÉ: Usamos fetch() para asegurar que obtenemos el canal
         targetChannel = await client.channels.fetch(ALERT_CHANNEL_ID); 
     } catch (error) {
         console.error(`❌ Error al intentar obtener el canal ${ALERT_CHANNEL_ID}:`, error.message);
@@ -126,12 +140,10 @@ async function checkGraffitiAlerts() {
         for (const item of allGraffiti) {
             const rescheduleCount = item.rescheduleCount || 0;
             
-            // Calculamos el tiempo de desbloqueo usando el offset: +12h + (rescheduleCount * 1h)
             const offsetMs = rescheduleCount * oneHourMs;
             const unlockTimeMs = item.lastSpawnTimestamp + twelveHoursMs + offsetMs; 
             const offsetHours = 12 + rescheduleCount;
 
-            // Condición de aviso: El desbloqueo ocurre en el rango [Ahora + 10m, Ahora + 11m]
             if (unlockTimeMs > (nowMs + tenMinutesMs) && unlockTimeMs <= (nowMs + elevenMinutesMs)) {
                 
                 if (unlockTimeMs <= nowMs) continue; 
@@ -155,6 +167,11 @@ async function checkGraffitiAlerts() {
                 const rescheduleCount = item.rescheduleCount || 0;
                 const isMaxed = rescheduleCount >= 3; 
                 
+                // --- BÚSQUEDA DE LA IMAGEN ---
+                const graffitiKey = `${item.numero}`; 
+                const imageUrl = GRAFFITI_IMAGES[graffitiKey]; 
+                // -----------------------------
+                
                 const description = 
                     `**Nº ${item.numero} | ${item.nombre.toUpperCase()}**\n` +
                     `> Offset: **+${alert.offsetHours}h** (actual)\n` +
@@ -165,6 +182,12 @@ async function checkGraffitiAlerts() {
                     .setTitle(`🚨 ¡AVISO DE DESBLOQUEO DE GRAFFITIS! (+${alert.offsetHours}h) 🚨`)
                     .setDescription(description)
                     .setTimestamp();
+                
+                // --- AÑADIR LA IMAGEN AL EMBED SI LA ENCUENTRA ---
+                if (imageUrl) {
+                    embed.setImage(imageUrl); 
+                }
+                // ------------------------------------------------
                 
                 // Creación de los botones
                 const nextCountDisplay = rescheduleCount + 1;
