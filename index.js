@@ -19,15 +19,15 @@ dotenv.config();
 // ----------------------------------------
 
 const GRAFFITI_IMAGES = {
-    "3": "https://imgur.com/a/BwuCZIY", 
-    "4": "https://imgur.com/a/v73smY2",
-    "5": "https://imgur.com/a/5lxG4MH",
-    "6": "https://imgur.com/a/LqhITsZ",
-    "7": "https://imgur.com/a/M9Sfm8x",
-    "8": "https://imgur.com/a/SoAOCXo",
-    "9": "https://imgur.com/a/yqlZQCR",
-    "10": "https://imgur.com/a/YzsL5LZ",
-    "11": "https://imgur.com/a/TTvPoNJ",
+    "3": "https://i.imgur.com/VNq4sUg.png", 
+    "4": "https://i.imgur.com/XjqBOtk.png",
+    "5": "https://i.imgur.com/gO5ogtv.png",
+    "6": "https://i.imgur.com/Q9DZpJM.png",
+    "7": "https://i.imgur.com/LgDiuJ7.png",
+    "8": "https://i.imgur.com/iJMshII.png",
+    "9": "https://i.imgur.com/6w0mi27.png",
+    "10": "https://i.imgur.com/901NWQo.png",
+    "11": "https://i.imgur.com/lHlz1Rx.png",
 };
 
 // ----------------------------------------
