@@ -71,7 +71,12 @@ async function connectDB() {
 // ----------------------------------------
 
 const getUnixTimestampSec = (date) => Math.floor(date.getTime() / 1000);
-
+const getDisplayName = (interaction) => {
+    if (interaction.member) {
+        return interaction.member.nickname || interaction.user.username;
+    }
+    return interaction.user.username;
+};
 /**
 * Calcula el tiempo exacto de desbloqueo teórico (12h + offset)
 */
@@ -267,7 +272,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 // MANEJO DE INTERACCIONES
 // ---------------------------
 client.on("interactionCreate", async (interaction) => {
-    
+    const displayName = getDisplayName(interaction).toUpperCase();
     if (interaction.isChatInputCommand()) {
         const commandName = interaction.commandName;
         const horaStr = interaction.options.getString("hora"); 
@@ -301,7 +306,7 @@ client.on("interactionCreate", async (interaction) => {
                 const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
                 const hubTimeStr = `${hubHour}:${hubMinute}`;
 
-                let replyContent = `✅ Graffiti **${nombre.toUpperCase()} (Nº ${numero})** registrado por ${interaction.user.tag}.\n`;
+                let replyContent = `✅ Graffiti **${nombre.toUpperCase()} (Nº ${numero})** registrado por ${displayName}.\n`;
                 
                 if (desfase > 0) {
                     replyContent += `*(${desfase} min de desfase aplicados).* \n`;
@@ -572,7 +577,7 @@ client.on("interactionCreate", async (interaction) => {
                     
                     // 2. Modificar el mensaje
                     const newEmbed = EmbedBuilder.from(interaction.message.embeds[0])
-                        .setTitle(`✅ GRAFFITI TIMEADO POR ${interaction.user.tag.toUpperCase()}`)
+                        .setTitle(`✅ GRAFFITI TIMEADO POR ${displayName}`)
                         .setDescription(
                             `**Nº ${numero} | ${updatedGraffiti.nombre.toUpperCase()}**\n` +
                             `> Registrado: <t:${getUnixTimestampSec(new Date(nowTimestampMs))}:F> (Reinicia el ciclo +12h)\n` +
