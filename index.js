@@ -5,6 +5,10 @@ import {
     EmbedBuilder,
     REST,
     Routes,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ComponentType,
 } from "discord.js";
 import dotenv from "dotenv";
 import express from 'express';
@@ -15,19 +19,18 @@ dotenv.config();
 // CONFIGURACIÓN DE DISCORD
 // ----------------------------------------
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
+const ALERT_CHANNEL_ID = process.env.ALERT_CHANNEL_ID; 
 
 // ----------------------------------------
 // ESQUEMA Y MODELO DE MONGOOSE 
 // ----------------------------------------
 
-// Definición de la estructura de un documento Graffiti
 const GraffitiSchema = new mongoose.Schema({
     nombre: { 
         type: String, 
         required: true, 
     },
-    // CLAVE: número es String y es el identificador único
     numero: { 
         type: String, 
         required: true, 
@@ -37,11 +40,14 @@ const GraffitiSchema = new mongoose.Schema({
         type: Number, 
         required: true 
     },
+    rescheduleCount: {
+        type: Number,
+        default: 0,
+    }
 }, {
     timestamps: false 
 });
 
-// Crear el Modelo que usaremos para interactuar con la DB
 const Graffiti = mongoose.model('Graffiti', GraffitiSchema);
 
 // ----------------------------------------
@@ -65,12 +71,112 @@ async function connectDB() {
 const getUnixTimestampSec = (date) => Math.floor(date.getTime() / 1000);
 
 /**
-* Calcula el tiempo exacto 12 horas después del último registro (el tiempo de desbloqueo teórico).
+* Calcula el tiempo exacto de desbloqueo teórico (12h + offset)
 */
-function calculateNextSpawn(lastTimestampMs) {
-    const nextSpawnTimeMs = lastTimestampMs + (12 * 60 * 60 * 1000); 
+function calculateNextSpawn(lastTimestampMs, offsetHours = 12) {
+    const nextSpawnTimeMs = lastTimestampMs + (offsetHours * 60 * 60 * 1000); 
     return new Date(nextSpawnTimeMs);
 }
+
+// ----------------------------------------
+// TAREA PROGRAMADA DE AVISO (CORREGIDA)
+// ----------------------------------------
+
+async function checkGraffitiAlerts() {
+    if (!ALERT_CHANNEL_ID) {
+        console.error("❌ ALERT_CHANNEL_ID no está configurado. La tarea de alertas no puede ejecutarse.");
+        return;
+    }
+
+    const nowMs = Date.now();
+    const tenMinutesMs = 10 * 60 * 1000;
+    const elevenMinutesMs = 11 * 60 * 1000;
+    const twelveHoursMs = 12 * 60 * 60 * 1000;
+    const oneHourMs = 60 * 60 * 1000;
+
+    const targetChannel = client.channels.cache.get(ALERT_CHANNEL_ID); 
+    
+    if (!targetChannel) {
+        console.error(`❌ Canal de alertas con ID ${ALERT_CHANNEL_ID} no encontrado en cache.`);
+        return; 
+    }
+
+    try {
+        const allGraffiti = await Graffiti.find({});
+        const alertsToSend = [];
+
+        for (const item of allGraffiti) {
+            const rescheduleCount = item.rescheduleCount || 0;
+            
+            // Calculamos el tiempo de desbloqueo usando el offset
+            // +12h + (rescheduleCount * 1h) -> +12h, +13h, +14h, +15h
+            const offsetMs = rescheduleCount * oneHourMs;
+            const unlockTimeMs = item.lastSpawnTimestamp + twelveHoursMs + offsetMs; 
+
+            // Condición de aviso: El desbloqueo ocurre en el rango [Ahora + 10m, Ahora + 11m]
+            if (unlockTimeMs > (nowMs + tenMinutesMs) && unlockTimeMs <= (nowMs + elevenMinutesMs)) {
+                
+                if (unlockTimeMs <= nowMs) continue; 
+                
+                const unlockDate = new Date(unlockTimeMs);
+                const unlockTimestampSec = getUnixTimestampSec(unlockDate);
+                
+                alertsToSend.push({
+                    item: item,
+                    offsetHours: 12 + rescheduleCount, // Para mostrar en el embed: 12h, 13h, etc.
+                    unlockTime: `<t:${unlockTimestampSec}:t>`,
+                    unlockRelative: `<t:${unlockTimestampSec}:R>`,
+                });
+            }
+        }
+
+        if (alertsToSend.length > 0) {
+            
+            for (const alert of alertsToSend) {
+                const item = alert.item;
+                const rescheduleCount = item.rescheduleCount || 0;
+                const isMaxed = rescheduleCount >= 3; // Límite (+15h)
+                
+                const description = 
+                    `**Nº ${item.numero} | ${item.nombre.toUpperCase()}**\n` +
+                    `> Offset: **+${alert.offsetHours}h** (actual)\n` +
+                    `> Desbloqueo: ${alert.unlockTime} **(${alert.unlockRelative})**`;
+
+                const embed = new EmbedBuilder()
+                    .setColor("#f1c40f")
+                    .setTitle(`🚨 ¡AVISO DE DESBLOQUEO DE GRAFFITIS! (${alert.offsetHours}h) 🚨`)
+                    .setDescription(description)
+                    .setTimestamp();
+                
+                // Creación de los botones
+                const oneHourButton = new ButtonBuilder()
+                    // Custom ID: 'reschedule_numeroDelGraf_rescheduleCount'
+                    .setCustomId(`reschedule_${item.numero}_${rescheduleCount}`)
+                    .setLabel(`+1 hora (${rescheduleCount + 1}/4)`) // Muestra el contador
+                    .setStyle(ButtonStyle.Secondary)
+                    .setDisabled(isMaxed); // Deshabilita si se alcanzó el límite
+
+                const timearButton = new ButtonBuilder()
+                    .setCustomId(`timear_${item.numero}`)
+                    .setLabel('Timear')
+                    .setStyle(ButtonStyle.Success);
+                
+                const row = new ActionRowBuilder().addComponents(oneHourButton, timearButton);
+
+                await targetChannel.send({ 
+                    content: `||@here||`, 
+                    embeds: [embed],
+                    components: [row]
+                });
+            }
+            console.log(`✅ Alerta de ${alertsToSend.length} grafitis enviada con botones.`);
+        }
+
+    } catch (error) {
+        console.error("❌ Error en la tarea programada de alertas:", error);
+    }
+}
+
 
 // ---------------------------
 // REGISTRO DE COMANDOS 
@@ -113,7 +219,7 @@ const commands = [
                 .setRequired(false)
         ),
         
-    // 3. Comando /NEXTGRAFF (Actualizado)
+    // 3. Comando /NEXTGRAFF 
     new SlashCommandBuilder()
         .setName("nextgraff")
         .setDescription("Muestra grafitis cerca de desbloquear, simulando una hora futura.")
@@ -127,7 +233,7 @@ const commands = [
             option
                 .setName("minutos")
                 .setDescription("Minutos a añadir a la hora actual (ej: 8)")
-                .setRequired(true) // Hacemos minutos requerido
+                .setRequired(true) 
         ),
 ].map((command) => command.toJSON());
 
@@ -150,241 +256,351 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 })();
 
 // ---------------------------
-// MANEJO DE INTERACCIONES
+// MANEJO DE INTERACCIONES (ACTUALIZADO)
 // ---------------------------
 client.on("interactionCreate", async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
     
-    const commandName = interaction.commandName;
-    const horaStr = interaction.options.getString("hora"); 
+    // Manejar comandos slash existentes
+    if (interaction.isChatInputCommand()) {
+        const commandName = interaction.commandName;
+        const horaStr = interaction.options.getString("hora"); 
 
-    // --- LÓGICA /SETGRAF ---
-    if (commandName === "setgraf") {
-        await interaction.deferReply(); 
-        
-        const nombre = interaction.options.getString("nombre");
-        const numero = interaction.options.getString("numero"); 
-        const desfase = interaction.options.getInteger("desfase") || 0; 
-
-        // Cálculo del tiempo de aparición real
-        const desfaseMs = desfase * 60 * 1000;
-        const actualTimestampMs = Date.now();
-        const spawnTimestampMs = actualTimestampMs - desfaseMs;
-        
-        try {
-            await Graffiti.findOneAndUpdate(
-                { numero: numero }, 
-                { 
-                    nombre: nombre, 
-                    lastSpawnTimestamp: spawnTimestampMs 
-                }, 
-                { upsert: true, new: true } 
-            );
+        // --- LÓGICA /SETGRAF ---
+        if (commandName === "setgraf") {
+            await interaction.deferReply(); 
             
-            const date = new Date(spawnTimestampMs);
-            const hubHour = String(date.getUTCHours()).padStart(2, '0');
-            const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
-            const hubTimeStr = `${hubHour}:${hubMinute}`;
+            const nombre = interaction.options.getString("nombre");
+            const numero = interaction.options.getString("numero"); 
+            const desfase = interaction.options.getInteger("desfase") || 0; 
 
-            let replyContent = `✅ Graffiti **${nombre.toUpperCase()} (Nº ${numero})** registrado por ${interaction.user.tag}.\n`;
+            const desfaseMs = desfase * 60 * 1000;
+            const actualTimestampMs = Date.now();
+            const spawnTimestampMs = actualTimestampMs - desfaseMs;
             
-            if (desfase > 0) {
-                replyContent += `*(${desfase} min de desfase aplicados).* \n`;
+            try {
+                // Se resetea rescheduleCount a 0
+                await Graffiti.findOneAndUpdate(
+                    { numero: numero }, 
+                    { 
+                        nombre: nombre, 
+                        lastSpawnTimestamp: spawnTimestampMs,
+                        rescheduleCount: 0, 
+                    }, 
+                    { upsert: true, new: true } 
+                );
+                
+                const date = new Date(spawnTimestampMs);
+                const hubHour = String(date.getUTCHours()).padStart(2, '0');
+                const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
+                const hubTimeStr = `${hubHour}:${hubMinute}`;
+
+                let replyContent = `✅ Graffiti **${nombre.toUpperCase()} (Nº ${numero})** registrado por ${interaction.user.tag}.\n`;
+                
+                if (desfase > 0) {
+                    replyContent += `*(${desfase} min de desfase aplicados).* \n`;
+                }
+
+                replyContent += `Último spawn registrado: **${hubTimeStr} HUB**. (Próximo aviso en ~12h)`;
+
+                await interaction.editReply({ 
+                    content: replyContent
+                });
+
+            } catch (error) {
+                console.error("Error al registrar graffiti:", error);
+                await interaction.editReply({ 
+                    content: `❌ Error al guardar el spawn de ${nombre}. Inténtalo de nuevo.`, 
+                });
             }
-
-            replyContent += `Último spawn registrado: **${hubTimeStr} HUB**`;
-
-            await interaction.editReply({ 
-                content: replyContent
-            });
-
-        } catch (error) {
-            console.error("Error al registrar graffiti:", error);
-            await interaction.editReply({ 
-                content: `❌ Error al guardar el spawn de ${nombre}. Inténtalo de nuevo.`, 
-            });
         }
-    }
 
-    // ----------------------------------------------------
-    // --- LÓGICA /NEXTGRAFF (ACTUALIZADA Y CORREGIDA) ---
-    // ----------------------------------------------------
-    else if (commandName === "nextgraff") {
-        await interaction.deferReply(); 
-        
-        const filtro = interaction.options.getString("filtro");
-        const minutesToAdd = interaction.options.getInteger("minutos"); // Minutos a sumar
-        const allFilteredMessages = [];
-        const nowMs = Date.now();
-        
-        // 1. Calcular el Minuto Objetivo (Minuto de la hora FUTURA)
-        const futureDateMs = nowMs + (minutesToAdd * 60 * 1000);
-        const futureDate = new Date(futureDateMs);
-        const targetMinutes = futureDate.getUTCMinutes(); // Minuto MM de la hora FUTURA
-        const targetHours = futureDate.getUTCHours(); // Hora HH de la hora FUTURA
+        // --- LÓGICA /NEXTGRAFF  ---
+        else if (commandName === "nextgraff") {
+            await interaction.deferReply(); 
+            const filtro = interaction.options.getString("filtro");
+            const minutesToAdd = interaction.options.getInteger("minutos"); 
+            const allFilteredMessages = [];
+            const nowMs = Date.now();
+            
+            const futureDateMs = nowMs + (minutesToAdd * 60 * 1000);
+            const futureDate = new Date(futureDateMs);
+            const targetMinutes = futureDate.getUTCMinutes(); 
+            const targetHours = futureDate.getUTCHours(); 
 
-        // Formato para el título
-        const targetTimeStr = `${String(targetHours).padStart(2, '0')}:${String(targetMinutes).padStart(2, '0')}`;
-        
-        // Constante para el filtro mínimo de 11 horas (para listar)
-        const elevenHoursMs = 11 * 60 * 60 * 1000;
-        // Constante para la ventana de proximidad (5 minutos ANTES del minuto objetivo)
-        const fiveMinutesBefore = 5; 
-        const RESULTS_PER_FIELD = 5; 
+            const targetTimeStr = `${String(targetHours).padStart(2, '0')}:${String(targetMinutes).padStart(2, '0')}`;
+            
+            const elevenHoursMs = 11 * 60 * 60 * 1000;
+            const fiveMinutesBefore = 5; 
+            const RESULTS_PER_FIELD = 5; 
 
-        try {
-            // 2. Obtener grafitis que contienen el filtro
-            const allGraffiti = await Graffiti.find({ 
-                nombre: { $regex: filtro, $options: 'i' } 
-            }).sort({ numero: 1 }); 
+            try {
+                const allGraffiti = await Graffiti.find({ 
+                    nombre: { $regex: filtro, $options: 'i' } 
+                }).sort({ numero: 1 }); 
 
-            if (allGraffiti.length === 0) {
-                return interaction.editReply({ 
-                    content: `⚠️ No se encontraron grafitis que contengan el nombre: **${filtro.toUpperCase()}** en la base de datos.`, 
+                if (allGraffiti.length === 0) {
+                    return interaction.editReply({ 
+                        content: `⚠️ No se encontraron grafitis que contengan el nombre: **${filtro.toUpperCase()}** en la base de datos.`, 
+                    });
+                }
+                
+                for (const item of allGraffiti) {
+                    const lastSpawnTimestampMs = item.lastSpawnTimestamp;
+                    
+                    // Aquí usamos solo 12h como referencia (el comando /nextgraf es para simular)
+                    const unlockDate = calculateNextSpawn(lastSpawnTimestampMs, 12);
+                    
+                    if (nowMs < (lastSpawnTimestampMs + elevenHoursMs)) {
+                        continue; 
+                    }
+                    
+                    const unlockMinutes = unlockDate.getUTCMinutes(); 
+                    
+                    let isVeryClose = false;
+                    let difference = (targetMinutes - unlockMinutes + 60) % 60;
+                
+                    if (difference >= 0 && difference <= fiveMinutesBefore) {
+                        isVeryClose = true;
+                    }
+                    
+                    const highlightEmoji = isVeryClose ? "🚨 " : "";
+                    const highlightText = isVeryClose ? "**" : "";
+
+                    const unlockTimestampSec = getUnixTimestampSec(unlockDate);
+                    const registrationTimestampSec = getUnixTimestampSec(new Date(lastSpawnTimestampMs));
+                    
+                    const hubHour = String(new Date(lastSpawnTimestampMs).getUTCHours()).padStart(2, '0');
+                    const hubMinute = String(new Date(lastSpawnTimestampMs).getUTCMinutes()).padStart(2, '0');
+                    const hubTimeStr = `${hubHour}:${hubMinute}`;
+                    
+                    const itemMessage = 
+                        `${highlightEmoji}${highlightText}Nº ${item.numero} | ${item.nombre.toUpperCase()}${highlightText}\n` +
+                        `> Registrado: <t:${registrationTimestampSec}:F> (\`${hubTimeStr}\` HUB)\n` +
+                        `> Desbloqueo (12h): <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`;
+
+                    allFilteredMessages.push(itemMessage);
+                }
+                
+                if (allFilteredMessages.length === 0) {
+                     await interaction.editReply({ 
+                         content: `⚠️ No se encontraron grafitis para **${filtro.toUpperCase()}** que hayan pasado el umbral de 11 horas desde su registro.`, 
+                       });
+                       return;
+                }
+                
+                const totalMatches = allFilteredMessages.length;
+                const embedsToSend = [];
+                
+                for (let i = 0; i < totalMatches; i += RESULTS_PER_FIELD) {
+                    const chunk = allFilteredMessages.slice(i, i + RESULTS_PER_FIELD);
+                    const isFirstEmbed = i === 0;
+                    
+                    const embed = new EmbedBuilder()
+                        .setColor("#3498db")
+                        .setDescription(chunk.join('\n\n').trim());
+                    
+                    if (isFirstEmbed) {
+                        embed.setTitle(`⏳ Grafitis Cerca del Desbloqueo para "${filtro.toUpperCase()}" | Objetivo: ${targetTimeStr} HUB`)
+                             .setTimestamp()
+                    } 
+                    
+                    embedsToSend.push(embed);
+                }
+
+                await interaction.editReply({ embeds: embedsToSend.slice(0, 10) });
+            } catch (error) {
+                console.error("Error en /nextgraff:", error);
+                await interaction.editReply("❌ Ocurrió un error al consultar la base de datos.");
+            }
+        }
+
+        // --- LÓGICA /GRAF ---
+        else if (commandName === "graf") {
+            
+            if (!horaStr) { 
+                return interaction.reply({ content: "Error: Falta la hora.", ephemeral: true });
+            }
+            const match = horaStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+            if (!match) {
+                return interaction.reply({
+                    content: "⚠️ Formato de hora inválido. Usa HH:MM (por ejemplo, 20:05)",
+                    ephemeral: true,
                 });
             }
             
-            // 3. Iterar y aplicar filtros
-            for (const item of allGraffiti) {
-                const lastSpawnTimestampMs = item.lastSpawnTimestamp;
+            const ubicacion = interaction.options.getString("ubicacion");
+            const numero = interaction.options.getString("numero"); 
+            const hora = parseInt(match[1]);
+            const minutos = parseInt(match[2]);
+            
+            const today = new Date();
+            const baseDate = new Date(
+                Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), hora, minutos)
+            );
+            
+            const diffs = [12, 13, 14, 15]; // Se añade +15h
+            const horariosPosibles = diffs.map((sum) => {
+                const newDate = new Date(baseDate.getTime());
+                newDate.setUTCHours(baseDate.getUTCHours() + sum);
                 
-                // Tiempo de desbloqueo teórico (12 horas después)
-                const unlockDate = calculateNextSpawn(lastSpawnTimestampMs);
+                const hubHora = String(newDate.getUTCHours()).padStart(2, "0");
+                const hubMinutos = String(newDate.getUTCMinutes()).padStart(2, "0");
+                const hubStr = `${hubHora}:${hubMinutos}`;
                 
-                // FILTRO LISTADO: Solo si han pasado al menos 11 horas (o más)
-                if (nowMs < (lastSpawnTimestampMs + elevenHoursMs)) {
-                    continue; 
+                const relativeTimestamp = `<t:${getUnixTimestampSec(newDate)}:R>`;
+                
+                return { hub: hubStr, relative: relativeTimestamp, sum: sum };
+            });
+
+            const embed = new EmbedBuilder()
+                .setColor("#9b59b6")
+                .setTitle("🎨 Reporte de Graffiti")
+                .setDescription(
+                    `📍 **Ubicación:** ${ubicacion}\n🔢 **Número:** ${numero || 'N/A'}\n 🕒 HUB: ${horaStr}`
+                )
+                .addFields(
+                    {
+                        name: "⏰ Próximos Posibles Horarios (12h a 15h)", // Se actualiza el texto
+                        value: horariosPosibles.map((h) => 
+                            `**+${h.sum}h**\n> HUB (UTC): \`${h.hub}\` (${h.relative})`
+                        ).join("\n\n"),
+                        inline: false,
+                    },
+                )
+                .setFooter({
+                    text: "Midnight • Grafitti",
+                });
+
+            await interaction.reply({ embeds: [embed] });
+        }
+        return;
+    } 
+    
+    // Manejar interacciones de botones
+    if (interaction.isButton()) {
+        const [action, numero, countStr] = interaction.customId.split('_');
+        
+        await interaction.deferUpdate();
+
+        try {
+            // ------------------------------------
+            // LÓGICA BOTÓN "1 hora +" (Reschedule/Offset)
+            // ------------------------------------
+            if (action === 'reschedule') {
+                const currentCount = parseInt(countStr);
+                const newCount = currentCount + 1;
+                const isMaxed = newCount >= 3; // límite  (+15h)
+                
+                // 1. Actualizar la BD (contador de reschedules)
+                const updatedGraffiti = await Graffiti.findOneAndUpdate(
+                    { numero: numero },
+                    { $inc: { rescheduleCount: 1 } },
+                    { new: true } 
+                );
+
+                if (updatedGraffiti) {
+                    const offsetHours = 12 + newCount;
+                    const newUnlockDate = calculateNextSpawn(updatedGraffiti.lastSpawnTimestamp, offsetHours);
+                    const newUnlockTimestampSec = getUnixTimestampSec(newUnlockDate);
+                    
+                    // 2. Modificar el mensaje (Embed y Botones)
+                    const newEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+                        .setTitle(`🚨 AVISO DESPLAZADO POR ${interaction.user.tag.toUpperCase()} (+${offsetHours}h) 🚨`)
+                        .setDescription(
+                            `**Nº ${numero} | ${updatedGraffiti.nombre.toUpperCase()}**\n` +
+                            `> Offset: **+${offsetHours}h** (actual)\n` +
+                            `> Nuevo Desbloqueo (12h): <t:${newUnlockTimestampSec}:t> **(<t:${newUnlockTimestampSec}:R>)**` +
+                            (isMaxed ? '\n\n**⚠️ Límite de pospuestos (+15h) alcanzado.**' : '')
+                        )
+                        .setColor("#e67e22"); // Naranja
+
+                    // 3. Modificar la fila de botones
+                    const nextCountDisplay = newCount + 1;
+                    const newOneHourButton = new ButtonBuilder()
+                        .setCustomId(`reschedule_${numero}_${newCount}`)
+                        .setLabel(`+1 hora (${nextCountDisplay}/4)`) 
+                        .setStyle(ButtonStyle.Secondary)
+                        .setDisabled(isMaxed);
+
+                    const newTimearButton = new ButtonBuilder()
+                        .setCustomId(`timear_${numero}`)
+                        .setLabel('Timear')
+                        .setStyle(ButtonStyle.Success);
+
+                    const newRow = new ActionRowBuilder().addComponents(newOneHourButton, newTimearButton);
+
+                    await interaction.message.edit({ 
+                        embeds: [newEmbed], 
+                        components: [newRow] 
+                    });
+                } else {
+                    await interaction.followUp({ content: '❌ Error: Graffiti no encontrado o ya eliminado.', ephemeral: true });
                 }
-                
-                // CÁLCULO PARA RESALTAR 
-                const unlockMinutes = unlockDate.getUTCMinutes(); // Minuto MM de desbloqueo
-                
-                let isVeryClose = false;
-                let difference = (targetMinutes - unlockMinutes + 60) % 60;
+            } 
             
-                if (difference >= 0 && difference <= fiveMinutesBefore) {
-                    isVeryClose = true;
+            // ------------------------------------
+            // LÓGICA BOTÓN "Timear"
+            // ------------------------------------
+            else if (action === 'timear') {
+                const nowTimestampMs = Date.now();
+
+                // 1. Actualizar la BD
+                const updatedGraffiti = await Graffiti.findOneAndUpdate(
+                    { numero: numero },
+                    { 
+                        $set: { 
+                            lastSpawnTimestamp: nowTimestampMs,
+                            rescheduleCount: 0, 
+                        }
+                    },
+                    { new: true }
+                );
+
+                if (updatedGraffiti) {
+                    // El nuevo desbloqueo es +12h desde ahora
+                    const unlockDate = calculateNextSpawn(updatedGraffiti.lastSpawnTimestamp, 12); 
+                    const unlockTimestampSec = getUnixTimestampSec(unlockDate);
+                    
+                    // 2. Modificar el mensaje
+                    const newEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+                        .setTitle(`✅ GRAFFITI TIMEADO POR ${interaction.user.tag.toUpperCase()}`)
+                        .setDescription(
+                            `**Nº ${numero} | ${updatedGraffiti.nombre.toUpperCase()}**\n` +
+                            `> Registrado: <t:${getUnixTimestampSec(new Date(nowTimestampMs))}:F> (Reinicia el ciclo +12h)\n` +
+                            `> Próximo Desbloqueo: <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`
+                        )
+                        .setColor("#2ecc71"); 
+
+                    // 3. Deshabilitar todos los botones
+                    const disabledRow = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder()
+                            .setCustomId('disabled_reschedule')
+                            .setLabel('Ciclo Reiniciado')
+                            .setStyle(ButtonStyle.Secondary)
+                            .setDisabled(true),
+                        new ButtonBuilder()
+                            .setCustomId('disabled_timear')
+                            .setLabel('Timeado')
+                            .setStyle(ButtonStyle.Success)
+                            .setDisabled(true)
+                    );
+
+                    await interaction.message.edit({ 
+                        embeds: [newEmbed], 
+                        components: [disabledRow] 
+                    });
+                } else {
+                    await interaction.followUp({ content: '❌ Error: Graffiti no encontrado o ya eliminado.', ephemeral: true });
                 }
-                
-                // Formato de resaltado
-                const highlightEmoji = isVeryClose ? "🚨 " : "";
-                const highlightText = isVeryClose ? "**" : "";
-
-                // Conversión a segundos para Discord Timestamps
-                const unlockTimestampSec = getUnixTimestampSec(unlockDate);
-                const registrationTimestampSec = getUnixTimestampSec(new Date(lastSpawnTimestampMs));
-                
-                // Hora UTC de Registro (para el texto plano)
-                const hubHour = String(new Date(lastSpawnTimestampMs).getUTCHours()).padStart(2, '0');
-                const hubMinute = String(new Date(lastSpawnTimestampMs).getUTCMinutes()).padStart(2, '0');
-                const hubTimeStr = `${hubHour}:${hubMinute}`;
-                
-                // Construcción del mensaje para un solo graffiti
-                const itemMessage = 
-                    `${highlightEmoji}${highlightText}Nº ${item.numero} | ${item.nombre.toUpperCase()}${highlightText}\n` +
-                    `> Registrado: <t:${registrationTimestampSec}:F> (\`${hubTimeStr}\` HUB)\n` +
-                    `> Desbloqueo (12h): <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`;
-
-                allFilteredMessages.push(itemMessage);
-            }
-            
-            // 4. Procesar resultados y crear múltiples embeds
-            if (allFilteredMessages.length === 0) {
-                 await interaction.editReply({ 
-                     content: `⚠️ No se encontraron grafitis para **${filtro.toUpperCase()}** que hayan pasado el umbral de 11 horas desde su registro.`, 
-                 });
-                 return;
-            }
-            
-            const totalMatches = allFilteredMessages.length;
-            const embedsToSend = [];
-            
-            // Dividir la lista de mensajes en bloques
-            for (let i = 0; i < totalMatches; i += RESULTS_PER_FIELD) {
-                const chunk = allFilteredMessages.slice(i, i + RESULTS_PER_FIELD);
-                const isFirstEmbed = i === 0;
-                
-                const embed = new EmbedBuilder()
-                    .setColor("#3498db")
-                    .setDescription(chunk.join('\n\n').trim());
-                
-                if (isFirstEmbed) {
-                    // Título con la hora futura calculada
-                    embed.setTitle(`⏳ Grafitis Cerca del Desbloqueo para "${filtro.toUpperCase()}" | Objetivo: ${targetTimeStr} HUB`)
-                         .setTimestamp()
-                } 
-                
-                embedsToSend.push(embed);
             }
 
-            // 5. Enviar los embeds
-            await interaction.editReply({ embeds: embedsToSend.slice(0, 10) });
         } catch (error) {
-            console.error("Error en /nextgraff:", error);
-            await interaction.editReply("❌ Ocurrió un error al consultar la base de datos.");
+            console.error("Error al manejar interacción de botón:", error);
+            await interaction.followUp({ content: '❌ Ocurrió un error al procesar el botón.', ephemeral: true });
         }
-    }
-
-    // --- LÓGICA /GRAF ---
-    else if (commandName === "graf") {
-        
-        if (!horaStr) { 
-            return interaction.reply({ content: "Error: Falta la hora.", ephemeral: true });
-        }
-        const match = horaStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
-        if (!match) {
-            return interaction.reply({
-                content: "⚠️ Formato de hora inválido. Usa HH:MM (por ejemplo, 20:05)",
-                ephemeral: true,
-            });
-        }
-        
-        const ubicacion = interaction.options.getString("ubicacion");
-        const numero = interaction.options.getString("numero"); 
-        const hora = parseInt(match[1]);
-        const minutos = parseInt(match[2]);
-        
-        const today = new Date();
-        const baseDate = new Date(
-            Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), hora, minutos)
-        );
-        
-        const diffs = [12, 13, 14];
-        const horariosPosibles = diffs.map((sum) => {
-            const newDate = new Date(baseDate.getTime());
-            newDate.setUTCHours(baseDate.getUTCHours() + sum);
-            
-            const hubHora = String(newDate.getUTCHours()).padStart(2, "0");
-            const hubMinutos = String(newDate.getUTCMinutes()).padStart(2, "0");
-            const hubStr = `${hubHora}:${hubMinutos}`;
-            
-            const relativeTimestamp = `<t:${getUnixTimestampSec(newDate)}:R>`;
-            
-            return { hub: hubStr, relative: relativeTimestamp, sum: sum };
-        });
-
-        const embed = new EmbedBuilder()
-            .setColor("#9b59b6")
-            .setTitle("🎨 Reporte de Graffiti")
-            .setDescription(
-                `📍 **Ubicación:** ${ubicacion}\n🔢 **Número:** ${numero || 'N/A'}\n 🕒 HUB: ${horaStr}`
-            )
-            .addFields(
-                {
-                    name: "⏰ Próximos Posibles Horarios",
-                    value: horariosPosibles.map((h) => 
-                        `**+${h.sum}h**\n> HUB (UTC): \`${h.hub}\` (${h.relative})`
-                    ).join("\n\n"),
-                    inline: false,
-                },
-            )
-            .setFooter({
-                text: "Midnight • Grafitti",
-            });
-
-        await interaction.reply({ embeds: [embed] });
     }
 });
+
 
 // ----------------------------------------
 // INICIO PRINCIPAL DE LA APLICACIÓN 
@@ -397,6 +613,12 @@ async function main() {
     
     await client.login(process.env.TOKEN);
     console.log(`✅ Conectado como ${client.user.tag}`);
+
+    // --- INICIAR EL TEMPORIZADOR DE AVISOS ---
+    checkGraffitiAlerts();
+    setInterval(checkGraffitiAlerts, 60 * 1000); 
+    console.log(`✅ Tarea de verificación de alertas iniciada (cada 1 minuto).`);
+    // ----------------------------------------
 
     const app = express();
     app.get('/', (req, res) => res.send('Bot activo ✅'));
