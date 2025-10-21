@@ -372,7 +372,7 @@ client.on("interactionCreate", async (interaction) => {
                 
                 const date = new Date(spawnTimestampMs);
                 const hubHour = String(date.getUTCHours()).padStart(2, '0');
-                const hubMinute = String(date.getUTCHours()).padStart(2, '0');
+                const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
                 const hubTimeStr = `${hubHour}:${hubMinute}`;
 
                 let replyContent = `✅ Graffiti **${nombre.toUpperCase()} (Nº ${numero})** registrado por **${displayName}**.\n`;
