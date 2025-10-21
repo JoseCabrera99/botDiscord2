@@ -14,10 +14,22 @@ import dotenv from "dotenv";
 import express from 'express';
 import mongoose from "mongoose"; 
 dotenv.config();
-// ----------------------------------------
-// Imagenes del graff
-// ----------------------------------------
 
+// ----------------------------------------
+// CONSTANTES Y CONFIGURACIÓN DE TIEMPO 🕒
+// ----------------------------------------
+const ONE_HOUR_MS = 60 * 60 * 1000;
+const TWELVE_HOURS_MS = 12 * ONE_HOUR_MS;
+const TWENTY_FOUR_HOURS_MS = 24 * ONE_HOUR_MS;
+
+// Valores para el campo 'rescheduleCount' en la DB
+const BASE_12H_START_COUNT = 0;
+const BASE_12H_MAX_OFFSET_COUNT = 3; // +15h (12 + 3)
+
+const BASE_24H_START_COUNT = 12; // Valor que indica el inicio del ciclo 24h (+24h)
+const BASE_24H_MAX_COUNT = 15; // Valor máximo (+27h)
+
+// Imagenes del graff
 const GRAFFITI_IMAGES = {
     "1": "https://i.imgur.com/TnimrdI.png",
     "2": "https://i.imgur.com/opalwbr.png",
@@ -97,7 +109,9 @@ const GraffitiSchema = new mongoose.Schema({
         type: Number, 
         required: true 
     },
-    rescheduleCount: { // 0: +12h, 1: +13h, 2: +14h, 3: +15h
+    // 0: +12h, 1: +13h, 2: +14h, 3: +15h
+    // 12: +24h, 13: +25h, 14: +26h, 15: +27h (Nuevo Ciclo)
+    rescheduleCount: { 
         type: Number,
         default: 0,
     }
@@ -128,10 +142,10 @@ async function connectDB() {
 const getUnixTimestampSec = (date) => Math.floor(date.getTime() / 1000);
 
 /**
-* Calcula el tiempo exacto de desbloqueo teórico (12h + offset)
+* Calcula el tiempo exacto de desbloqueo teórico (lastTimestamp + totalHours)
 */
-function calculateNextSpawn(lastTimestampMs, offsetHours = 12) {
-    const nextSpawnTimeMs = lastTimestampMs + (offsetHours * 60 * 60 * 1000); 
+function calculateNextSpawn(lastTimestampMs, totalHours) {
+    const nextSpawnTimeMs = lastTimestampMs + (totalHours * 60 * 60 * 1000); 
     return new Date(nextSpawnTimeMs);
 }
 
@@ -147,7 +161,7 @@ const getDisplayName = (interaction) => {
 };
 
 // ----------------------------------------
-// TAREA PROGRAMADA DE AVISO 
+// TAREA PROGRAMADA DE AVISO (Modificada para 12h/24h)
 // ----------------------------------------
 
 async function checkGraffitiAlerts() {
@@ -159,8 +173,6 @@ async function checkGraffitiAlerts() {
     const nowMs = Date.now();
     const tenMinutesMs = 10 * 60 * 1000;
     const elevenMinutesMs = 11 * 60 * 1000;
-    const twelveHoursMs = 12 * 60 * 60 * 1000;
-    const oneHourMs = 60 * 60 * 1000;
 
     let targetChannel;
     try {
@@ -181,21 +193,45 @@ async function checkGraffitiAlerts() {
 
         for (const item of allGraffiti) {
             const rescheduleCount = item.rescheduleCount || 0;
-            
-            const offsetMs = rescheduleCount * oneHourMs;
-            const unlockTimeMs = item.lastSpawnTimestamp + twelveHoursMs + offsetMs; 
-            const offsetHours = 12 + rescheduleCount;
+            let currentBaseHours;
+            let extraOffsetHours;
 
+            // Determinar el ciclo actual y el offset
+            if (rescheduleCount >= BASE_24H_START_COUNT) {
+                // Ciclo de 24 horas (24h a 27h)
+                currentBaseHours = 24;
+                extraOffsetHours = rescheduleCount - BASE_24H_START_COUNT;
+            } else {
+                // Ciclo de 12 horas (12h a 15h)
+                currentBaseHours = 12;
+                extraOffsetHours = rescheduleCount;
+            }
+            
+            const totalHours = currentBaseHours + extraOffsetHours;
+            
+            // Si el grafiti está en el ciclo 15h, y ya pasó, lo saltamos.
+            // La nueva lógica de pospuesto a 24h ya está en el botón 'reschedule'.
+            if (totalHours <= 15 && totalHours < 24 && nowMs > (item.lastSpawnTimestamp + (15 * ONE_HOUR_MS) + tenMinutesMs)) {
+                // El grafiti superó las 15h, pero no fue pospuesto al ciclo 24h. 
+                // No enviamos alerta, espera a que alguien lo timee o use /setgraf.
+                continue; 
+            }
+
+            const unlockDate = calculateNextSpawn(item.lastSpawnTimestamp, totalHours);
+            const unlockTimeMs = unlockDate.getTime(); 
+
+            // Verificar si la hora de desbloqueo está entre 10 y 11 minutos
             if (unlockTimeMs > (nowMs + tenMinutesMs) && unlockTimeMs <= (nowMs + elevenMinutesMs)) {
                 
                 if (unlockTimeMs <= nowMs) continue; 
                 
-                const unlockDate = new Date(unlockTimeMs);
                 const unlockTimestampSec = getUnixTimestampSec(unlockDate);
                 
                 alertsToSend.push({
                     item: item,
-                    offsetHours: offsetHours, 
+                    offsetHours: totalHours, 
+                    currentBaseHours: currentBaseHours,
+                    currentRescheduleCount: rescheduleCount,
                     unlockTime: `<t:${unlockTimestampSec}:t>`,
                     unlockRelative: `<t:${unlockTimestampSec}:R>`,
                 });
@@ -206,9 +242,21 @@ async function checkGraffitiAlerts() {
             
             for (const alert of alertsToSend) {
                 const item = alert.item;
-                const rescheduleCount = item.rescheduleCount || 0;
-                const isMaxed = rescheduleCount >= 3; 
+                const rescheduleCount = alert.currentRescheduleCount;
                 
+                // --- Lógica de Botón para ambos ciclos ---
+                const is24hCycle = rescheduleCount >= BASE_24H_START_COUNT;
+                const maxCount = BASE_24H_MAX_COUNT; // El máximo es 15 (+27h)
+                const isMaxed = rescheduleCount >= maxCount;
+                
+                // Calculamos el paso actual para el display (0 a 3)
+                const currentStep = is24hCycle ? rescheduleCount - BASE_24H_START_COUNT : rescheduleCount;
+                const nextCountDisplay = currentStep + 1; // 1/4, 2/4...
+                
+                // El customId necesita el valor actual para que la lógica de posponer funcione.
+                // En el botón, enviaremos el valor actual + 1 (ej: 3)
+                const nextDBCount = rescheduleCount + 1; 
+
                 // --- BÚSQUEDA DE LA IMAGEN ---
                 const graffitiKey = `${item.numero}`; 
                 const imageUrl = GRAFFITI_IMAGES[graffitiKey]; 
@@ -216,6 +264,7 @@ async function checkGraffitiAlerts() {
                 
                 const description = 
                     `**Nº ${item.numero} | ${item.nombre.toUpperCase()}**\n` +
+                    `> Base: **+${alert.currentBaseHours}h** (Ciclo)\n` +
                     `> Offset: **+${alert.offsetHours}h** (actual)\n` +
                     `> Desbloqueo: ${alert.unlockTime} **(${alert.unlockRelative})**`;
 
@@ -232,9 +281,11 @@ async function checkGraffitiAlerts() {
                 // ------------------------------------------------
                 
                 // Creación de los botones
-                const nextCountDisplay = rescheduleCount + 1;
+                const nextOffsetHours = is24hCycle ? 24 + nextCountDisplay : 12 + nextCountDisplay;
+
                 const oneHourButton = new ButtonBuilder()
-                    .setCustomId(`reschedule_${item.numero}_${rescheduleCount}`)
+                    // Usamos el nextDBCount (ej. 13, 4)
+                    .setCustomId(`reschedule_${item.numero}_${nextDBCount}`) 
                     .setLabel(`+1 hora (${nextCountDisplay}/4)`) 
                     .setStyle(ButtonStyle.Secondary)
                     .setDisabled(isMaxed);
@@ -335,7 +386,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 })();
 
 // ---------------------------
-// MANEJO DE INTERACCIONES
+// MANEJO DE INTERACCIONES (Modificado)
 // ---------------------------
 client.on("interactionCreate", async (interaction) => {
     
@@ -372,7 +423,7 @@ client.on("interactionCreate", async (interaction) => {
                 
                 const date = new Date(spawnTimestampMs);
                 const hubHour = String(date.getUTCHours()).padStart(2, '0');
-                const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
+                const hubMinute = String(date.getUTCMinutes()).padStart(2, '0'); // ✅ CORREGIDO
                 const hubTimeStr = `${hubHour}:${hubMinute}`;
 
                 let replyContent = `✅ Graffiti **${nombre.toUpperCase()} (Nº ${numero})** registrado por **${displayName}**.\n`;
@@ -394,7 +445,7 @@ client.on("interactionCreate", async (interaction) => {
                 });
             }
         }
-        // --- LÓGICA /NEXTGRAFF (Mantiene lógica original de 12h para simulación) ---
+        // --- LÓGICA /NEXTGRAFF (Manteniendo la lógica original de 12h para simulación) ---
         else if (commandName === "nextgraff") {
             await interaction.deferReply(); 
             
@@ -428,6 +479,7 @@ client.on("interactionCreate", async (interaction) => {
                 for (const item of allGraffiti) {
                     const lastSpawnTimestampMs = item.lastSpawnTimestamp;
                     
+                    // Nota: Se usa 12h de base para la simulación de 'nextgraff' para estimar el punto más bajo.
                     const unlockDate = calculateNextSpawn(lastSpawnTimestampMs, 12); 
                     
                     if (nowMs < (lastSpawnTimestampMs + elevenHoursMs)) {
@@ -447,10 +499,11 @@ client.on("interactionCreate", async (interaction) => {
                     const highlightText = isVeryClose ? "**" : "";
 
                     const unlockTimestampSec = getUnixTimestampSec(unlockDate);
-                    const registrationTimestampSec = getUnixTimestampSec(new Date(lastSpawnTimestampMs));
+                    const lastSpawnDate = new Date(lastSpawnTimestampMs);
+                    const registrationTimestampSec = getUnixTimestampSec(lastSpawnDate);
                     
-                    const hubHour = String(new Date(lastSpawnTimestampMs).getUTCHours()).padStart(2, '0');
-                    const hubMinute = String(new Date(lastSpawnTimestampMs).getUTCHours()).padStart(2, '0');
+                    const hubHour = String(lastSpawnDate.getUTCHours()).padStart(2, '0');
+                    const hubMinute = String(lastSpawnDate.getUTCMinutes()).padStart(2, '0'); // ✅ CORREGIDO
                     const hubTimeStr = `${hubHour}:${hubMinute}`;
                     
                     const itemMessage = 
@@ -462,10 +515,10 @@ client.on("interactionCreate", async (interaction) => {
                 }
                 
                 if (allFilteredMessages.length === 0) {
-                     await interaction.editReply({ 
-                         content: `⚠️ No se encontraron grafitis para **${filtro.toUpperCase()}** que hayan pasado el umbral de 11 horas desde su registro.`, 
-                       });
-                       return;
+                      await interaction.editReply({ 
+                           content: `⚠️ No se encontraron grafitis para **${filtro.toUpperCase()}** que hayan pasado el umbral de 11 horas desde su registro.`, 
+                         });
+                          return;
                 }
                 
                 const totalMatches = allFilteredMessages.length;
@@ -517,7 +570,8 @@ client.on("interactionCreate", async (interaction) => {
                 Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), hora, minutos)
             );
             
-            const diffs = [12, 13, 14, 15]; // Rango de desbloqueo completo
+            // Rango de desbloqueo: 12h a 15h
+            const diffs = [12, 13, 14, 15]; 
             const horariosPosibles = diffs.map((sum) => {
                 const newDate = new Date(baseDate.getTime());
                 newDate.setUTCHours(baseDate.getUTCHours() + sum);
@@ -566,33 +620,57 @@ client.on("interactionCreate", async (interaction) => {
             // LÓGICA BOTÓN "1 hora +" (Desplazar Offset)
             // ------------------------------------
             if (action === 'reschedule') {
-                const currentCount = parseInt(countStr);
-                const newCount = currentCount + 1;
-                const isMaxed = newCount >= 3; 
+                const currentDBCount = parseInt(countStr) - 1; // El valor en countStr es el que DEBE tener la DB después del pospuesto anterior.
                 
-                // 1. Actualizar la BD (solo incrementamos el contador)
+                let newRescheduleCount;
+                
+                // 🛑 NUEVA LÓGICA: Si es el último pospuesto del ciclo actual, salta al siguiente ciclo.
+                if (currentDBCount === BASE_12H_MAX_OFFSET_COUNT) { 
+                    // Si viene de +15h (count 3), el nuevo ciclo es +24h (count 12)
+                    newRescheduleCount = BASE_24H_START_COUNT; 
+                } else if (currentDBCount === BASE_24H_MAX_COUNT) {
+                    // Si ya está en +27h (count 15), no puede posponerse más
+                    // Esto no debería ser posible si el botón está bien deshabilitado
+                    newRescheduleCount = BASE_24H_MAX_COUNT; 
+                }
+                else {
+                    newRescheduleCount = currentDBCount + 1; // Incremento normal
+                }
+                
+                // 1. Actualizar la BD
                 const updatedGraffiti = await Graffiti.findOneAndUpdate(
                     { numero: numero },
-                    { $inc: { rescheduleCount: 1 } },
+                    { $set: { rescheduleCount: newRescheduleCount } }, 
                     { new: true } 
                 );
 
                 if (updatedGraffiti) {
-                    const offsetHours = 12 + newCount;
+                    // Recalculamos el total de horas basado en el nuevo count
+                    const is24hCycle = newRescheduleCount >= BASE_24H_START_COUNT;
+                    const currentBaseHours = is24hCycle ? 24 : 12;
+                    const extraOffsetHours = is24hCycle ? newRescheduleCount - BASE_24H_START_COUNT : newRescheduleCount;
+                    const offsetHours = currentBaseHours + extraOffsetHours;
+                    
+                    const maxCount = BASE_24H_MAX_COUNT; // Límite final es 15
+                    const isMaxed = newRescheduleCount >= maxCount; // Sólo se alcanza con 15 (+27h)
+
+                    // Usamos la función calculateNextSpawn con el offset total
                     const newUnlockDate = calculateNextSpawn(updatedGraffiti.lastSpawnTimestamp, offsetHours); 
                     const newUnlockTimestampSec = getUnixTimestampSec(newUnlockDate);
                     
                     // --- 2. DESHABILITAR BOTONES EN EL MENSAJE ORIGINAL Y CONFIRMAR ---
                     
+                    const maxedMessage = isMaxed ? `\n\n**⚠️ Límite de pospuestos (+27h) alcanzado. La próxima alerta será la última.**` : '';
+                    
                     // Prepara la nueva descripción de confirmación
                     const newDescription = 
                         `**Nº ${numero} | ${updatedGraffiti.nombre.toUpperCase()}**\n` +
+                        `> **Ciclo de ${currentBaseHours}h**\n` +
                         `> Offset: **+${offsetHours}h** (nuevo)\n` +
                         `> Próximo Aviso Programado: <t:${newUnlockTimestampSec}:t> **(<t:${newUnlockTimestampSec}:R>)**` +
-                        (isMaxed ? '\n\n**⚠️ Límite de pospuestos (+15h) alcanzado. La próxima alerta será la última.**' : '');
+                        maxedMessage;
 
                     const originalEmbed = EmbedBuilder.from(interaction.message.embeds[0])
-                        // Título de confirmación con el alias del usuario
                         .setTitle(`✅ POSPUESTO a +${offsetHours}h por ${displayName}`) 
                         .setDescription(newDescription)
                         .setColor("#1abc9c"); // Verde
@@ -616,9 +694,6 @@ client.on("interactionCreate", async (interaction) => {
                         embeds: [originalEmbed], 
                         components: [disabledRow] 
                     });
-                    
-                    // El nuevo mensaje de alerta será enviado por la tarea programada (checkGraffitiAlerts)
-                    // cuando falten 10 minutos para el nuevo tiempo (+13h, +14h, o +15h).
 
                 } else {
                     await interaction.followUp({ content: '❌ Error: Graffiti no encontrado o ya eliminado.', ephemeral: true });
@@ -631,7 +706,7 @@ client.on("interactionCreate", async (interaction) => {
             else if (action === 'timear') {
                 const nowTimestampMs = Date.now();
 
-                // 1. Actualizar la BD (se actualiza el spawn y se resetea el contador)
+                // 1. Actualizar la BD (se actualiza el spawn y se resetea el contador a 0)
                 const updatedGraffiti = await Graffiti.findOneAndUpdate(
                     { numero: numero },
                     { 
