@@ -75,7 +75,7 @@ const GRAFFITI_IMAGES = {
     "44": "https://i.imgur.com/Gw4kX8x.png",
     "45": "https://i.imgur.com/MS9oUOB.png",
     "46": "https://i.imgur.com/Y1ScoSd.png",
-    "S/N": "https://i.imgur.com/F94WobV.png",
+    "S/N": "https://i.imgur.com/F94WobP.png",
     "ELYSIAN": "https://i.imgur.com/TSO3RCl.png",
     "AERO": "https://i.imgur.com/FI4ieDo.png",
     "TATAVIAM": "https://i.imgur.com/mL1CYiI.png",
@@ -255,7 +255,7 @@ async function checkGraffitiAlerts() {
                 const nextCountDisplay = currentStep + 1; // 1/4, 2/4...
                 
                 // El customId necesita el valor actual para que la lógica de posponer funcione.
-                // En el botón, enviaremos el valor actual + 1 (ej: 3)
+                // En el botón, enviaremos el valor actual + 1 (ej: 13, 4)
                 const nextDBCount = rescheduleCount + 1; 
 
                 // --- BÚSQUEDA DE LA IMAGEN ---
@@ -387,7 +387,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 })();
 
 // ---------------------------
-// MANEJO DE INTERACCIONES (Modificado)
+// MANEJO DE INTERACCIONES (Modificado para paginación de /nextgraff)
 // ---------------------------
 client.on("interactionCreate", async (interaction) => {
     
@@ -446,14 +446,13 @@ client.on("interactionCreate", async (interaction) => {
                 });
             }
         }
-        // --- LÓGICA /NEXTGRAFF (Modificado para incluir botones) ---
+        // --- LÓGICA /NEXTGRAFF (Ahora con Paginación) ---
         else if (commandName === "nextgraff") {
             await interaction.deferReply(); 
             
             const filtro = interaction.options.getString("filtro");
             const minutesToAdd = interaction.options.getInteger("minutos"); 
-            const allFilteredMessages = [];
-            const buttons = []; // Array para los botones
+            
             const nowMs = Date.now();
             
             const futureDateMs = nowMs + (minutesToAdd * 60 * 1000);
@@ -465,7 +464,9 @@ client.on("interactionCreate", async (interaction) => {
             
             const elevenHoursMs = 11 * 60 * 60 * 1000;
             const fiveMinutesBefore = 5; 
-            const MAX_BUTTON_RESULTS = 5; // Límite para mostrar botones
+            const CHUNK_SIZE = 5; // El tamaño de cada lote de grafitis
+            
+            const filteredAndPreparedGraffiti = []; // Array para almacenar los datos listos
 
             try {
                 const allGraffiti = await Graffiti.find({ 
@@ -478,24 +479,26 @@ client.on("interactionCreate", async (interaction) => {
                     });
                 }
                 
-                let itemCounter = 0;
+                // 1. Preparar y filtrar todos los resultados
                 for (const item of allGraffiti) {
-                    if (itemCounter >= MAX_BUTTON_RESULTS) break; // Limitar a 5 resultados con botón
-
+                    
                     const lastSpawnTimestampMs = item.lastSpawnTimestamp;
                     
-                    // Nota: Se usa 12h de base para la simulación de 'nextgraff' para estimar el punto más bajo.
-                    const unlockDate = calculateNextSpawn(lastSpawnTimestampMs, 12); 
-                    
+                    // Si no ha pasado el umbral de 11h, lo saltamos
                     if (nowMs < (lastSpawnTimestampMs + elevenHoursMs)) {
                         continue; 
                     }
                     
+                    // Usamos 12h de base para la simulación
+                    const unlockDate = calculateNextSpawn(lastSpawnTimestampMs, 12); 
                     const unlockMinutes = unlockDate.getUTCMinutes(); 
                     
                     let isVeryClose = false;
+                    
+                    // Diferencia de minutos entre el tiempo simulado y el tiempo real de unlock a 12h
                     let difference = (targetMinutes - unlockMinutes + 60) % 60;
                 
+                    // Está muy cerca si la diferencia es 0, 1, 2, 3, 4, o 5 minutos.
                     if (difference >= 0 && difference <= fiveMinutesBefore) {
                         isVeryClose = true;
                     }
@@ -516,42 +519,73 @@ client.on("interactionCreate", async (interaction) => {
                         `> Registrado: <t:${registrationTimestampSec}:F> (\`${hubTimeStr}\` HUB)\n` +
                         `> Desbloqueo (12h): <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`;
 
-                    allFilteredMessages.push(itemMessage);
-                    
-                    // Generar botón para el graffiti
-                    buttons.push(
-                        new ButtonBuilder()
-                            .setCustomId(`timear_nextgraff_${item.numero}`)
-                            .setLabel(`Timear N° ${item.numero}`)
-                            .setStyle(ButtonStyle.Primary)
-                    );
-                    
-                    itemCounter++; // Contar solo los items que pasaron el filtro de tiempo
+                    filteredAndPreparedGraffiti.push({
+                         item: item,
+                         message: itemMessage,
+                         isAlarm: isVeryClose,
+                    });
                 }
                 
-                if (allFilteredMessages.length === 0) {
+                if (filteredAndPreparedGraffiti.length === 0) {
                       await interaction.editReply({ 
                            content: `⚠️ No se encontraron grafitis para **${filtro.toUpperCase()}** que hayan pasado el umbral de 11 horas desde su registro.`, 
                          });
                           return;
                 }
                 
-                const totalMatches = allFilteredMessages.length;
+                let replySent = false;
                 
-                // Creación de un único Embed con todos los resultados
-                const embed = new EmbedBuilder()
-                    .setColor("#3498db")
-                    .setTitle(`⏳ Grafitis Cerca del Desbloqueo para "${filtro.toUpperCase()}" | Objetivo: ${targetTimeStr} HUB (Mostrando ${totalMatches} con botón)`)
-                    .setDescription(allFilteredMessages.join('\n\n').trim())
-                    .setTimestamp();
-                
-                // Fila de botones
-                const buttonRow = new ActionRowBuilder().addComponents(buttons);
-
-                await interaction.editReply({ 
-                    embeds: [embed], 
-                    components: buttons.length > 0 ? [buttonRow] : [] // Solo si hay botones
-                });
+                // 2. Iterar sobre los resultados en lotes (chunks) de 5
+                for (let i = 0; i < filteredAndPreparedGraffiti.length; i += CHUNK_SIZE) {
+                    const chunk = filteredAndPreparedGraffiti.slice(i, i + CHUNK_SIZE);
+                    
+                    let chunkMessages = [];
+                    let chunkButtons = [];
+                    
+                    chunk.forEach(data => {
+                        chunkMessages.push(data.message);
+                        
+                        // Si el grafiti tiene alarma (está en los 5m), el botón la lleva
+                        const highlightEmoji = data.isAlarm ? "🚨 " : "";
+                        const buttonLabel = `${highlightEmoji}Timear N° ${data.item.numero}`;
+                        
+                        chunkButtons.push(
+                            new ButtonBuilder()
+                                .setCustomId(`timear_nextgraff_${data.item.numero}`)
+                                .setLabel(buttonLabel)
+                                .setStyle(ButtonStyle.Primary)
+                        );
+                    });
+                    
+                    // 3. Construir el Embed
+                    const chunkNumber = Math.floor(i / CHUNK_SIZE) + 1;
+                    const totalChunks = Math.ceil(filteredAndPreparedGraffiti.length / CHUNK_SIZE);
+                    
+                    const embed = new EmbedBuilder()
+                        .setColor("#3498db")
+                        .setTitle(`⏳ Grafitis Cerca de Desbloqueo | Lote ${chunkNumber} de ${totalChunks}`)
+                        .setDescription(chunkMessages.join('\n\n').trim())
+                        .setTimestamp()
+                        .setFooter({ text: `Simulando hora: ${targetTimeStr} HUB. Filtro: ${filtro.toUpperCase()}` });
+                    
+                    // 4. Construir la Fila de Botones
+                    const buttonRow = new ActionRowBuilder().addComponents(chunkButtons);
+                    
+                    const messagePayload = { 
+                        embeds: [embed], 
+                        components: [buttonRow] 
+                    };
+                    
+                    // 5. Enviar el mensaje
+                    if (!replySent) {
+                        // El primer lote usa editReply para responder la interacción inicial
+                        await interaction.editReply(messagePayload);
+                        replySent = true;
+                    } else {
+                        // Los lotes subsecuentes usan followUp
+                        await interaction.followUp(messagePayload);
+                    }
+                }
 
             } catch (error) {
                 console.error("Error en /nextgraff:", error);
@@ -793,7 +827,7 @@ client.on("interactionCreate", async (interaction) => {
                             newDescription = lines.filter(line => line !== '---LINE_TO_REMOVE---').join('\n').trim();
                             
                             // Actualizar Título y Descripción del Embed
-                            newEmbed.setTitle(`✅ Graffiti N°${numero} TIMEADO | Otros botones desactivados.`)
+                            newEmbed.setTitle(`✅ Graffiti N°${numero} TIMEADO | Los botones de este mensaje han sido desactivados.`)
                                          .setDescription(newDescription)
                                          .setColor("#2ecc71"); 
                         }
