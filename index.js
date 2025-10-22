@@ -71,7 +71,7 @@ const GRAFFITI_IMAGES = {
     "44": "https://i.imgur.com/Gw4kX8x.png",
     "45": "https://i.imgur.com/MS9oUOB.png",
     "46": "https://i.imgur.com/Y1ScoSd.png",
-    "S/N": "https://i.imgur.com/F94WobP.png",
+    "S/N": "https://i.imgur.com/F94WobV.png",
     "ELYSIAN": "https://i.imgur.com/TSO3RCl.png",
     "AERO": "https://i.imgur.com/FI4ieDo.png",
     "TATAVIAM": "https://i.imgur.com/mL1CYiI.png",
