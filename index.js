@@ -511,7 +511,7 @@ client.on("interactionCreate", async (interaction) => {
                     const registrationTimestampSec = getUnixTimestampSec(lastSpawnDate);
                     
                     const hubHour = String(lastSpawnDate.getUTCHours()).padStart(2, '0');
-                    const hubMinute = String(lastSpawnDate.getUTCMiddleMinutes()).padStart(2, '0');
+                    const hubMinute = String(lastSpawnDate.getUTCMinutes()).padStart(2, '0');
                     const hubTimeStr = `${hubHour}:${hubMinute}`;
                     
                     const itemMessage = 
