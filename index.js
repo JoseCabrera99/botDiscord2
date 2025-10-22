@@ -157,7 +157,7 @@ const getDisplayName = (interaction) => {
 };
 
 // ----------------------------------------
-// TAREA PROGRAMADA DE AVISO (MODIFICADA SIN BOTÓN +1H)
+// TAREA PROGRAMADA DE AVISO
 // ----------------------------------------
 
 async function checkGraffitiAlerts() {
@@ -198,6 +198,8 @@ async function checkGraffitiAlerts() {
                 const unlockDate = calculateNextSpawn(item.lastSpawnTimestamp, totalHours);
                 const unlockTimeMs = unlockDate.getTime(); 
 
+                // Si el spawn de 15h ya pasó hace más de 11 minutos,
+                // significa que la ventana de alerta para este graffiti ha expirado.
                 if (totalHours === 15 && unlockTimeMs < (nowMs - elevenMinutesMs)) {
                      break; 
                 }
@@ -213,6 +215,8 @@ async function checkGraffitiAlerts() {
                         unlockTime: `<t:${unlockTimestampSec}:t>`,
                         unlockRelative: `<t:${unlockTimestampSec}:R>`,
                     });
+                    
+                    // Encontramos el primer y único aviso activo en el ciclo de 12h-15h.
                     alertFound = true;
                     break; 
                 }
@@ -246,18 +250,9 @@ async function checkGraffitiAlerts() {
                 }
                 // ------------------------------------------------
                 
-                // Botón de Timear
-                const timearButton = new ButtonBuilder()
-                    .setCustomId(`timear_${item.numero}`)
-                    .setLabel('Timear')
-                    .setStyle(ButtonStyle.Success);
-                
-                const row = new ActionRowBuilder().addComponents(timearButton); 
-
                 await targetChannel.send({ 
                     content: `||@here||`, 
                     embeds: [embed],
-                    components: [row]
                 });
             }
             console.log(`✅ Alerta de ${alertsToSend.length} grafitis enviada.`);
@@ -625,8 +620,16 @@ client.on("interactionCreate", async (interaction) => {
         let isNextGraffAction = false;
         
         if (action === 'timear' && parts.length === 2) {
-            // Acción 'timear' proveniente de la alerta (timear_[numero])
             numero = parts[1];
+            
+            // Forzar un mensaje de error si el botón viene de la alerta (ya no debería existir)
+            await interaction.deferUpdate();
+            await interaction.followUp({ 
+                content: '⚠️ Acción deshabilitada. El Timeo ahora solo se realiza con el comando **/setgraf**.', 
+                ephemeral: true 
+            });
+            return;
+            
         } else if (action === 'timear' && parts[1] === 'nextgraff') {
             // Acción 'timear' proveniente de /nextgraff (timear_nextgraff_[numero])
             numero = parts[2];
@@ -634,7 +637,7 @@ client.on("interactionCreate", async (interaction) => {
         } else if (action === 'reschedule') {
             // La acción 'reschedule' ya no se usa, pero la dejamos para que no rompa si existe un mensaje antiguo
             await interaction.deferUpdate();
-            await interaction.followUp({ content: '⚠️ Esta función ha sido deshabilitada. Por favor, usa el botón "Timear".', ephemeral: true });
+            await interaction.followUp({ content: '⚠️ Esta función ha sido deshabilitada. Por favor, usa el botón "Timear" de /nextgraff o el comando /setgraf.', ephemeral: true });
             return;
         } else {
             // No es una acción conocida
@@ -645,9 +648,9 @@ client.on("interactionCreate", async (interaction) => {
 
         try {
             // ------------------------------------
-            // LÓGICA BOTÓN "Timear" (desde Alerta y /nextgraff)
+            // LÓGICA BOTÓN "Timear" (desde /nextgraff, NO desde Alerta Automática)
             // ------------------------------------
-            if (action === 'timear') {
+            if (action === 'timear' && isNextGraffAction) {
                 const nowTimestampMs = Date.now();
 
                 // 1. Actualizar la BD (se actualiza el spawn y se resetea el contador a 0 para reiniciar el ciclo)
@@ -669,91 +672,62 @@ client.on("interactionCreate", async (interaction) => {
                     
                     const newEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
 
-                    if (isNextGraffAction) {
-                        // --- LÓGICA PARA BOTÓN /NEXTGRAFF (Incluye deshabilitar mensajes hermanos) ---
-                        
-                        // 2. Modificar el mensaje/Embed del mensaje clickeado
-                        let newDescription = newEmbed.data.description;
-                        
-                        const timearConfirmation = `**✅ TIMEADO POR ${displayName}**\n> Nuevo Desbloqueo (12h): <t:${unlockTimestampSec}:t> (<t:${unlockTimestampSec}:R>)`;
-                        
-                        // Reemplazar la línea del graffiti timeado con el estado de timeado
-                        if (newDescription) {
-                            const lines = newDescription.split('\n');
-                            let found = false;
-                            for (let i = 0; i < lines.length; i++) {
-                                // Buscar la línea que contiene el número del grafiti
-                                if (lines[i].includes(`Nº ${numero}`)) {
-                                    lines[i] = timearConfirmation; 
-                                    found = true;
-                                    
-                                    // Eliminar líneas subsecuentes (Registrado, Desbloqueo)
-                                    // Aseguramos que solo borramos las líneas de detalles (que empiezan con '>')
-                                    let deleteCount = 0;
-                                    for(let j = i + 1; j < lines.length && deleteCount < 2; j++) {
-                                        if (lines[j].startsWith('>')) {
-                                            lines[j] = '---LINE_TO_REMOVE---';
-                                            deleteCount++;
-                                        }
+                    // --- LÓGICA PARA BOTÓN /NEXTGRAFF (Incluye deshabilitar mensajes hermanos) ---
+                    
+                    // 2. Modificar el mensaje/Embed del mensaje clickeado
+                    let newDescription = newEmbed.data.description;
+                    
+                    const timearConfirmation = `**✅ TIMEADO POR ${displayName}**\n> Nuevo Desbloqueo (12h): <t:${unlockTimestampSec}:t> (<t:${unlockTimestampSec}:R>)`;
+                    
+                    // Reemplazar la línea del graffiti timeado con el estado de timeado
+                    if (newDescription) {
+                        const lines = newDescription.split('\n');
+                        let found = false;
+                        for (let i = 0; i < lines.length; i++) {
+                            // Buscar la línea que contiene el número del grafiti
+                            if (lines[i].includes(`Nº ${numero}`)) {
+                                lines[i] = timearConfirmation; 
+                                found = true;
+                                
+                                // Eliminar líneas subsecuentes (Registrado, Desbloqueo)
+                                // Aseguramos que solo borramos las líneas de detalles (que empiezan con '>')
+                                let deleteCount = 0;
+                                for(let j = i + 1; j < lines.length && deleteCount < 2; j++) {
+                                    if (lines[j].startsWith('>')) {
+                                        lines[j] = '---LINE_TO_REMOVE---';
+                                        deleteCount++;
                                     }
-                                    if (found) break; 
                                 }
+                                if (found) break; 
                             }
-                            
-                            // Recomponer la descripción, quitando las líneas de borrado
-                            newDescription = lines.filter(line => line !== '---LINE_TO_REMOVE---').join('\n').trim();
-                            
-                            // Actualizar Título y Descripción del Embed
-                            newEmbed.setTitle(`✅ Graffiti N°${numero} TIMEADO | Interacción Finalizada.`)
-                                         .setDescription(newDescription)
-                                         .setColor("#2ecc71"); 
                         }
                         
-                        // 3. Deshabilitar todos los botones en el mensaje clickeado
-                        const disabledComponents = interaction.message.components.map(row => {
-                            const newRow = ActionRowBuilder.from(row);
-                            newRow.components.forEach(button => {
-                                if (button.data.custom_id === customId) {
-                                    button.setLabel(`Timeado por ${displayName}`)
-                                          .setStyle(ButtonStyle.Success);
-                                }
-                                button.setDisabled(true);
-                            });
-                            return newRow;
-                        });
-
-                        await interaction.message.edit({ 
-                            embeds: [newEmbed], 
-                            components: disabledComponents
-                        });
-                    
-                    } else {
-                        // --- LÓGICA PARA BOTÓN DE ALERTA (Ciclo 12/24h) ---
+                        // Recomponer la descripción, quitando las líneas de borrado
+                        newDescription = lines.filter(line => line !== '---LINE_TO_REMOVE---').join('\n').trim();
                         
-                        // 2. Modificar el mensaje
-                        newEmbed
-                            .setTitle(`✅ GRAFFITI TIMEADO POR ${displayName}`)
-                            .setDescription(
-                                `**Nº ${numero} | ${updatedGraffiti.nombre.toUpperCase()}**\n` +
-                                `> Registrado: <t:${getUnixTimestampSec(new Date(nowTimestampMs))}:F> (Reinicia el ciclo +12h)\n` +
-                                `> Próximo Desbloqueo: <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`
-                            )
-                            .setColor("#2ecc71"); 
-
-                        // 3. Deshabilitar todos los botones
-                        const disabledRow = new ActionRowBuilder().addComponents(
-                            new ButtonBuilder()
-                                .setCustomId('disabled_timear')
-                                .setLabel('Timeado')
-                                .setStyle(ButtonStyle.Success)
-                                .setDisabled(true)
-                        );
-
-                        await interaction.message.edit({ 
-                            embeds: [newEmbed], 
-                            components: [disabledRow] 
-                        });
+                        // Actualizar Título y Descripción del Embed
+                        newEmbed.setTitle(`✅ Graffiti N°${numero} TIMEADO | Interacción Finalizada.`)
+                                     .setDescription(newDescription)
+                                     .setColor("#2ecc71"); 
                     }
+                    
+                    // 3. Deshabilitar todos los botones en el mensaje clickeado (y cambiar el label del pulsado)
+                    const disabledComponents = interaction.message.components.map(row => {
+                        const newRow = ActionRowBuilder.from(row);
+                        newRow.components.forEach(button => {
+                            if (button.data.custom_id === customId) {
+                                button.setLabel(`Timeado por ${displayName}`)
+                                      .setStyle(ButtonStyle.Success);
+                            }
+                            button.setDisabled(true);
+                        });
+                        return newRow;
+                    });
+
+                    await interaction.message.edit({ 
+                        embeds: [newEmbed], 
+                        components: disabledComponents
+                    });
                     
                 } else {
                     await interaction.followUp({ content: '❌ Error: Graffiti no encontrado o ya eliminado.', ephemeral: true });
