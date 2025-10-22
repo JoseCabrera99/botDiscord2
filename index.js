@@ -81,7 +81,7 @@ const GRAFFITI_IMAGES = {
     "TATAVIAM": "https://i.imgur.com/mL1CYiI.png",
     "PUERTA": "https://i.imgur.com/TKS6mYI.png",
     "MAZE": "https://i.imgur.com/3zB5YSP.png",
-    "STRAW": "https://i.imgur.com/3OfFwMw.png",
+    "STRAW": "https://i.imgur.com/3OfFmXw.png",
 };
 
 // ----------------------------------------
@@ -511,7 +511,7 @@ client.on("interactionCreate", async (interaction) => {
                     const registrationTimestampSec = getUnixTimestampSec(lastSpawnDate);
                     
                     const hubHour = String(lastSpawnDate.getUTCHours()).padStart(2, '0');
-                    const hubMinute = String(lastSpawnDate.getUTCMinutes()).padStart(2, '0');
+                    const hubMinute = String(lastSpawnDate.getUTCMiddleMinutes()).padStart(2, '0');
                     const hubTimeStr = `${hubHour}:${hubMinute}`;
                     
                     const itemMessage = 
@@ -561,12 +561,15 @@ client.on("interactionCreate", async (interaction) => {
                     const chunkNumber = Math.floor(i / CHUNK_SIZE) + 1;
                     const totalChunks = Math.ceil(filteredAndPreparedGraffiti.length / CHUNK_SIZE);
                     
+                    // --- CAMBIO AQUÍ: Título con la hora simulada ---
+                    const embedTitle = `⏳ Grafitis Cerca de Desbloqueo a las ${targetTimeStr} HUB`;
+                    
                     const embed = new EmbedBuilder()
                         .setColor("#3498db")
-                        .setTitle(`⏳ Grafitis Cerca de Desbloqueo | Lote ${chunkNumber} de ${totalChunks}`)
+                        .setTitle(embedTitle)
                         .setDescription(chunkMessages.join('\n\n').trim())
                         .setTimestamp()
-                        .setFooter({ text: `Simulando hora: ${targetTimeStr} HUB. Filtro: ${filtro.toUpperCase()}` });
+                        .setFooter({ text: `Filtro: ${filtro.toUpperCase()} | Lote ${chunkNumber} de ${totalChunks}` });
                     
                     // 4. Construir la Fila de Botones
                     const buttonRow = new ActionRowBuilder().addComponents(chunkButtons);
