@@ -176,6 +176,7 @@ async function checkGraffitiAlerts() {
 
     let targetChannel;
     try {
+        // Se realiza la costosa llamada a la API cada minuto (comportamiento original)
         targetChannel = await client.channels.fetch(ALERT_CHANNEL_ID); 
     } catch (error) {
         console.error(`❌ Error al intentar obtener el canal ${ALERT_CHANNEL_ID}:`, error.message);
@@ -196,7 +197,7 @@ async function checkGraffitiAlerts() {
             let currentBaseHours;
             let extraOffsetHours;
 
-            // Determinar el ciclo actual y el offset
+            // Determinar el ciclo actual y el offset (Lógica original inline)
             if (rescheduleCount >= BASE_24H_START_COUNT) {
                 // Ciclo de 24 horas (24h a 27h)
                 currentBaseHours = 24;
@@ -445,13 +446,14 @@ client.on("interactionCreate", async (interaction) => {
                 });
             }
         }
-        // --- LÓGICA /NEXTGRAFF (Manteniendo la lógica original de 12h para simulación) ---
+        // --- LÓGICA /NEXTGRAFF (Modificado para incluir botones) ---
         else if (commandName === "nextgraff") {
             await interaction.deferReply(); 
             
             const filtro = interaction.options.getString("filtro");
             const minutesToAdd = interaction.options.getInteger("minutos"); 
             const allFilteredMessages = [];
+            const buttons = []; // Array para los botones
             const nowMs = Date.now();
             
             const futureDateMs = nowMs + (minutesToAdd * 60 * 1000);
@@ -463,7 +465,7 @@ client.on("interactionCreate", async (interaction) => {
             
             const elevenHoursMs = 11 * 60 * 60 * 1000;
             const fiveMinutesBefore = 5; 
-            const RESULTS_PER_FIELD = 5; 
+            const MAX_BUTTON_RESULTS = 5; // Límite para mostrar botones
 
             try {
                 const allGraffiti = await Graffiti.find({ 
@@ -476,7 +478,10 @@ client.on("interactionCreate", async (interaction) => {
                     });
                 }
                 
+                let itemCounter = 0;
                 for (const item of allGraffiti) {
+                    if (itemCounter >= MAX_BUTTON_RESULTS) break; // Limitar a 5 resultados con botón
+
                     const lastSpawnTimestampMs = item.lastSpawnTimestamp;
                     
                     // Nota: Se usa 12h de base para la simulación de 'nextgraff' para estimar el punto más bajo.
@@ -503,7 +508,7 @@ client.on("interactionCreate", async (interaction) => {
                     const registrationTimestampSec = getUnixTimestampSec(lastSpawnDate);
                     
                     const hubHour = String(lastSpawnDate.getUTCHours()).padStart(2, '0');
-                    const hubMinute = String(lastSpawnDate.getUTCMinutes()).padStart(2, '0'); // ✅ CORREGIDO
+                    const hubMinute = String(lastSpawnDate.getUTCMinutes()).padStart(2, '0');
                     const hubTimeStr = `${hubHour}:${hubMinute}`;
                     
                     const itemMessage = 
@@ -512,6 +517,16 @@ client.on("interactionCreate", async (interaction) => {
                         `> Desbloqueo (12h): <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`;
 
                     allFilteredMessages.push(itemMessage);
+                    
+                    // Generar botón para el graffiti
+                    buttons.push(
+                        new ButtonBuilder()
+                            .setCustomId(`timear_nextgraff_${item.numero}`)
+                            .setLabel(`Timear N° ${item.numero}`)
+                            .setStyle(ButtonStyle.Primary)
+                    );
+                    
+                    itemCounter++; // Contar solo los items que pasaron el filtro de tiempo
                 }
                 
                 if (allFilteredMessages.length === 0) {
@@ -522,25 +537,22 @@ client.on("interactionCreate", async (interaction) => {
                 }
                 
                 const totalMatches = allFilteredMessages.length;
-                const embedsToSend = [];
                 
-                for (let i = 0; i < totalMatches; i += RESULTS_PER_FIELD) {
-                    const chunk = allFilteredMessages.slice(i, i + RESULTS_PER_FIELD);
-                    const isFirstEmbed = i === 0;
-                    
-                    const embed = new EmbedBuilder()
-                        .setColor("#3498db")
-                        .setDescription(chunk.join('\n\n').trim());
-                    
-                    if (isFirstEmbed) {
-                        embed.setTitle(`⏳ Grafitis Cerca del Desbloqueo para "${filtro.toUpperCase()}" | Objetivo: ${targetTimeStr} HUB`)
-                             .setTimestamp()
-                    } 
-                    
-                    embedsToSend.push(embed);
-                }
+                // Creación de un único Embed con todos los resultados
+                const embed = new EmbedBuilder()
+                    .setColor("#3498db")
+                    .setTitle(`⏳ Grafitis Cerca del Desbloqueo para "${filtro.toUpperCase()}" | Objetivo: ${targetTimeStr} HUB (Mostrando ${totalMatches} con botón)`)
+                    .setDescription(allFilteredMessages.join('\n\n').trim())
+                    .setTimestamp();
+                
+                // Fila de botones
+                const buttonRow = new ActionRowBuilder().addComponents(buttons);
 
-                await interaction.editReply({ embeds: embedsToSend.slice(0, 10) });
+                await interaction.editReply({ 
+                    embeds: [embed], 
+                    components: buttons.length > 0 ? [buttonRow] : [] // Solo si hay botones
+                });
+
             } catch (error) {
                 console.error("Error en /nextgraff:", error);
                 await interaction.editReply("❌ Ocurrió un error al consultar la base de datos.");
@@ -611,7 +623,28 @@ client.on("interactionCreate", async (interaction) => {
     
     // Manejar interacciones de botones
     if (interaction.isButton()) {
-        const [action, numero, countStr] = interaction.customId.split('_');
+        const customId = interaction.customId;
+        const parts = customId.split('_');
+        const action = parts[0];
+        
+        // Determinar el número de graffiti y la acción específica
+        let numero;
+        let isNextGraffAction = false;
+        
+        if (action === 'timear' && parts.length === 2) {
+            // Acción 'timear' proveniente de la alerta (timear_[numero])
+            numero = parts[1];
+        } else if (action === 'timear' && parts[1] === 'nextgraff') {
+            // Acción 'timear' proveniente de /nextgraff (timear_nextgraff_[numero])
+            numero = parts[2];
+            isNextGraffAction = true;
+        } else if (action === 'reschedule') {
+            // Acción 'reschedule' (reschedule_[numero]_[count])
+            numero = parts[1];
+        } else {
+            // No es una acción conocida
+            return;
+        }
         
         await interaction.deferUpdate();
 
@@ -620,17 +653,17 @@ client.on("interactionCreate", async (interaction) => {
             // LÓGICA BOTÓN "1 hora +" (Desplazar Offset)
             // ------------------------------------
             if (action === 'reschedule') {
-                const currentDBCount = parseInt(countStr) - 1; // El valor en countStr es el que DEBE tener la DB después del pospuesto anterior.
+                const countStr = parts[2];
+                const currentDBCount = parseInt(countStr) - 1; 
                 
                 let newRescheduleCount;
                 
-                // 🛑 NUEVA LÓGICA: Si es el último pospuesto del ciclo actual, salta al siguiente ciclo.
+                // LÓGICA DE CICLO: Si es el último pospuesto del ciclo actual, salta al siguiente ciclo.
                 if (currentDBCount === BASE_12H_MAX_OFFSET_COUNT) { 
                     // Si viene de +15h (count 3), el nuevo ciclo es +24h (count 12)
                     newRescheduleCount = BASE_24H_START_COUNT; 
                 } else if (currentDBCount === BASE_24H_MAX_COUNT) {
                     // Si ya está en +27h (count 15), no puede posponerse más
-                    // Esto no debería ser posible si el botón está bien deshabilitado
                     newRescheduleCount = BASE_24H_MAX_COUNT; 
                 }
                 else {
@@ -652,7 +685,7 @@ client.on("interactionCreate", async (interaction) => {
                     const offsetHours = currentBaseHours + extraOffsetHours;
                     
                     const maxCount = BASE_24H_MAX_COUNT; // Límite final es 15
-                    const isMaxed = newRescheduleCount >= maxCount; // Sólo se alcanza con 15 (+27h)
+                    const isMaxed = newRescheduleCount >= maxCount; 
 
                     // Usamos la función calculateNextSpawn con el offset total
                     const newUnlockDate = calculateNextSpawn(updatedGraffiti.lastSpawnTimestamp, offsetHours); 
@@ -701,7 +734,7 @@ client.on("interactionCreate", async (interaction) => {
             } 
             
             // ------------------------------------
-            // LÓGICA BOTÓN "Timear"
+            // LÓGICA BOTÓN "Timear" (desde Alerta y /nextgraff)
             // ------------------------------------
             else if (action === 'timear') {
                 const nowTimestampMs = Date.now();
@@ -723,35 +756,99 @@ client.on("interactionCreate", async (interaction) => {
                     const unlockDate = calculateNextSpawn(updatedGraffiti.lastSpawnTimestamp, 12); 
                     const unlockTimestampSec = getUnixTimestampSec(unlockDate);
                     
-                    // 2. Modificar el mensaje
-                    const newEmbed = EmbedBuilder.from(interaction.message.embeds[0])
-                        // Título de confirmación con el alias del usuario
-                        .setTitle(`✅ GRAFFITI TIMEADO POR ${displayName}`)
-                        .setDescription(
-                            `**Nº ${numero} | ${updatedGraffiti.nombre.toUpperCase()}**\n` +
-                            `> Registrado: <t:${getUnixTimestampSec(new Date(nowTimestampMs))}:F> (Reinicia el ciclo +12h)\n` +
-                            `> Próximo Desbloqueo: <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`
-                        )
-                        .setColor("#2ecc71"); 
+                    const newEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
 
-                    // 3. Deshabilitar todos los botones
-                    const disabledRow = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder()
-                            .setCustomId('disabled_reschedule')
-                            .setLabel('Ciclo Reiniciado')
-                            .setStyle(ButtonStyle.Secondary)
-                            .setDisabled(true),
-                        new ButtonBuilder()
-                            .setCustomId('disabled_timear')
-                            .setLabel('Timeado')
-                            .setStyle(ButtonStyle.Success)
-                            .setDisabled(true)
-                    );
+                    if (isNextGraffAction) {
+                        // --- LÓGICA PARA BOTÓN /NEXTGRAFF ---
+                        
+                        // 2. Modificar el mensaje/Embed
+                        let newDescription = newEmbed.data.description;
+                        
+                        const timearConfirmation = `**✅ TIMEADO POR ${displayName}**\n> Nuevo Desbloqueo (12h): <t:${unlockTimestampSec}:t> (<t:${unlockTimestampSec}:R>)`;
+                        
+                        // Reemplazar la línea del graffiti timeado con el estado de timeado
+                        if (newDescription) {
+                            const lines = newDescription.split('\n');
+                            let found = false;
+                            for (let i = 0; i < lines.length; i++) {
+                                // Buscar la línea que contiene el número del grafiti
+                                if (lines[i].includes(`Nº ${numero}`)) {
+                                    lines[i] = timearConfirmation; 
+                                    found = true;
+                                    
+                                    // Eliminar líneas subsecuentes (Registrado, Desbloqueo)
+                                    // Aseguramos que solo borramos las líneas de detalles (que empiezan con '>')
+                                    let deleteCount = 0;
+                                    for(let j = i + 1; j < lines.length && deleteCount < 2; j++) {
+                                        if (lines[j].startsWith('>')) {
+                                            lines[j] = '---LINE_TO_REMOVE---';
+                                            deleteCount++;
+                                        }
+                                    }
+                                    if (found) break; 
+                                }
+                            }
+                            
+                            // Recomponer la descripción, quitando las líneas de borrado
+                            newDescription = lines.filter(line => line !== '---LINE_TO_REMOVE---').join('\n').trim();
+                            
+                            // Actualizar Título y Descripción del Embed
+                            newEmbed.setTitle(`✅ Graffiti N°${numero} TIMEADO | Otros botones desactivados.`)
+                                         .setDescription(newDescription)
+                                         .setColor("#2ecc71"); 
+                        }
+                        
+                        // 3. Deshabilitar todos los botones en el mensaje (y cambiar el label del pulsado)
+                        const disabledComponents = interaction.message.components.map(row => {
+                            const newRow = ActionRowBuilder.from(row);
+                            newRow.components.forEach(button => {
+                                if (button.data.custom_id === customId) {
+                                    button.setLabel(`Timeado por ${displayName}`)
+                                          .setStyle(ButtonStyle.Success);
+                                }
+                                button.setDisabled(true);
+                            });
+                            return newRow;
+                        });
 
-                    await interaction.message.edit({ 
-                        embeds: [newEmbed], 
-                        components: [disabledRow] 
-                    });
+                        await interaction.message.edit({ 
+                            embeds: [newEmbed], 
+                            components: disabledComponents
+                        });
+                        
+                    } else {
+                        // --- LÓGICA PARA BOTÓN DE ALERTA ---
+                        
+                        // 2. Modificar el mensaje
+                        newEmbed
+                            .setTitle(`✅ GRAFFITI TIMEADO POR ${displayName}`)
+                            .setDescription(
+                                `**Nº ${numero} | ${updatedGraffiti.nombre.toUpperCase()}**\n` +
+                                `> Registrado: <t:${getUnixTimestampSec(new Date(nowTimestampMs))}:F> (Reinicia el ciclo +12h)\n` +
+                                `> Próximo Desbloqueo: <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`
+                            )
+                            .setColor("#2ecc71"); 
+
+                        // 3. Deshabilitar todos los botones
+                        const disabledRow = new ActionRowBuilder().addComponents(
+                            new ButtonBuilder()
+                                .setCustomId('disabled_reschedule')
+                                .setLabel('Ciclo Reiniciado')
+                                .setStyle(ButtonStyle.Secondary)
+                                .setDisabled(true),
+                            new ButtonBuilder()
+                                .setCustomId('disabled_timear')
+                                .setLabel('Timeado')
+                                .setStyle(ButtonStyle.Success)
+                                .setDisabled(true)
+                        );
+
+                        await interaction.message.edit({ 
+                            embeds: [newEmbed], 
+                            components: [disabledRow] 
+                        });
+                    }
+                    
                 } else {
                     await interaction.followUp({ content: '❌ Error: Graffiti no encontrado o ya eliminado.', ephemeral: true });
                 }
