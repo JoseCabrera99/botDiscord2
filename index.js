@@ -496,16 +496,17 @@ client.on("interactionCreate", async (interaction) => {
                     chunk.forEach(data => {
                         chunkMessages.push(data.message);
 
-                        // Si el grafiti tiene alarma (está en los 5m), el botón la lleva
-                        const highlightEmoji = data.isAlarm ? "🚨 " : "";
-                        const buttonLabel = `${highlightEmoji}Timear N° ${data.item.numero}`;
+                        if (data.isAlarm) {
+                            const highlightEmoji = "🚨 ";
+                            const buttonLabel = `${highlightEmoji}Timear N° ${data.item.numero}`;
 
-                        chunkButtons.push(
-                            new ButtonBuilder()
-                                .setCustomId(`timear_nextgraff_${data.item.numero}`)
-                                .setLabel(buttonLabel)
-                                .setStyle(ButtonStyle.Primary)
-                        );
+                            chunkButtons.push(
+                                new ButtonBuilder()
+                                    .setCustomId(`timear_nextgraff_${data.item.numero}`)
+                                    .setLabel(buttonLabel)
+                                    .setStyle(ButtonStyle.Primary)
+                            );
+                        }
                     });
 
                     // 3. Construir el Embed
@@ -522,15 +523,16 @@ client.on("interactionCreate", async (interaction) => {
                         .setTimestamp()
                         .setFooter({ text: `Filtro: ${filtro.toUpperCase()} | Lote ${chunkNumber} de ${totalChunks}` });
 
-                    // 4. Construir la Fila de Botones
-                    const buttonRow = new ActionRowBuilder().addComponents(chunkButtons);
-
                     const messagePayload = {
                         embeds: [embed],
-                        components: [buttonRow]
                     };
+                    
+                    if (chunkButtons.length > 0) {
+                        const buttonRow = new ActionRowBuilder().addComponents(chunkButtons);
+                        messagePayload.components = [buttonRow];
+                    }
 
-                    // 5. Enviar el mensaje
+                    // 4. Enviar el mensaje
                     if (!replySent) {
                         // El primer lote usa editReply para responder la interacción inicial
                         await interaction.editReply(messagePayload);
@@ -644,7 +646,7 @@ client.on("interactionCreate", async (interaction) => {
             return;
         }
 
-        // --- INICIO DEL MANEJO DE ERROR 10062 ---
+        // --- MANEJO DE ERROR 10062 ---
         try {
             await interaction.deferUpdate();
         } catch (error) {
@@ -659,7 +661,7 @@ client.on("interactionCreate", async (interaction) => {
                     });
                 } catch (followUpError) {
                 }
-                return; // Detenemos la ejecución del resto del código de este botón.
+                return; 
             }
             throw error;
         }
@@ -668,7 +670,7 @@ client.on("interactionCreate", async (interaction) => {
 
         try {
             // ------------------------------------
-            // LÓGICA BOTÓN "Timear" (desde /nextgraff, NO desde Alerta Automática)
+            // LÓGICA BOTÓN "Timear" (desde /nextgraff)
             // ------------------------------------
             if (action === 'timear' && isNextGraffAction) {
                 const nowTimestampMs = Date.now();
