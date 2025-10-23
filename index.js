@@ -249,7 +249,7 @@ async function checkGraffitiAlerts() {
                     embed.setImage(imageUrl); 
                 }
                 // ------------------------------------------------
-                
+          
                 await targetChannel.send({ 
                     content: `||@here||`, 
                     embeds: [embed],
@@ -706,7 +706,7 @@ client.on("interactionCreate", async (interaction) => {
                         newDescription = lines.filter(line => line !== '---LINE_TO_REMOVE---').join('\n').trim();
                         
                         // Actualizar Título y Descripción del Embed
-                        newEmbed.setTitle(`✅ Graffiti N°${numero} TIMEADO | Interacción Finalizada.`)
+                        newEmbed.setTitle(`✅ Graffiti N°${numero} - ${updatedGraffiti.nombre.toUpperCase()} TIMEADO`)
                                      .setDescription(newDescription)
                                      .setColor("#2ecc71"); 
                     }
