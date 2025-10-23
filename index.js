@@ -8,11 +8,11 @@ import {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
-    AttachmentBuilder, 
+    AttachmentBuilder,
 } from "discord.js";
 import dotenv from "dotenv";
 import express from 'express';
-import mongoose from "mongoose"; 
+import mongoose from "mongoose";
 dotenv.config();
 
 // ----------------------------------------
@@ -23,13 +23,13 @@ const TWELVE_HOURS_MS = 12 * ONE_HOUR_MS;
 const TWENTY_FOUR_HOURS_MS = 24 * ONE_HOUR_MS;
 
 // Ciclo de alerta fijo (12h, 13h, 14h, 15h)
-const ALERT_HOURS_CYCLE = [12, 13, 14, 15]; 
+const ALERT_HOURS_CYCLE = [12, 13, 14, 15];
 
 // Imagenes del graff
 const GRAFFITI_IMAGES = {
     "1": "https://i.imgur.com/TnimrdI.png",
     "2": "https://i.imgur.com/opalwbr.png",
-    "3": "https://i.imgur.com/VNq4sUg.png", 
+    "3": "https://i.imgur.com/VNq4sUg.png",
     "4": "https://i.imgur.com/XjqBOtk.png",
     "5": "https://i.imgur.com/gO5ogtv.png",
     "6": "https://i.imgur.com/Q9DZpJM.png",
@@ -84,35 +84,35 @@ const GRAFFITI_IMAGES = {
 // CONFIGURACIÓN DE DISCORD
 // ----------------------------------------
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] }); 
-const ALERT_CHANNEL_ID = process.env.ALERT_CHANNEL_ID; 
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
+const ALERT_CHANNEL_ID = process.env.ALERT_CHANNEL_ID;
 
 // ----------------------------------------
-// ESQUEMA Y MODELO DE MONGOOSE 
+// ESQUEMA Y MODELO DE MONGOOSE
 // ----------------------------------------
 
 const GraffitiSchema = new mongoose.Schema({
-    nombre: { 
-        type: String, 
-        required: true, 
+    nombre: {
+        type: String,
+        required: true,
     },
-    numero: { 
-        type: String, 
-        required: true, 
-        unique: true 
+    numero: {
+        type: String,
+        required: true,
+        unique: true
     },
-    lastSpawnTimestamp: { 
-        type: Number, 
-        required: true 
+    lastSpawnTimestamp: {
+        type: Number,
+        required: true
     },
     // Este campo se mantiene para compatibilidad con /setgraf,
     // pero ya no se usa para la lógica de alertas automáticas.
-    rescheduleCount: { 
+    rescheduleCount: {
         type: Number,
         default: 0,
     }
 }, {
-    timestamps: false 
+    timestamps: false
 });
 
 const Graffiti = mongoose.model('Graffiti', GraffitiSchema);
@@ -127,7 +127,7 @@ async function connectDB() {
         console.log("✅ Conexión a MongoDB Atlas establecida.");
     } catch (error) {
         console.error("❌ Error al conectar a MongoDB:", error);
-        process.exit(1); 
+        process.exit(1);
     }
 }
 
@@ -141,7 +141,7 @@ const getUnixTimestampSec = (date) => Math.floor(date.getTime() / 1000);
 * Calcula el tiempo exacto de desbloqueo teórico (lastTimestamp + totalHours)
 */
 function calculateNextSpawn(lastTimestampMs, totalHours) {
-    const nextSpawnTimeMs = lastTimestampMs + (totalHours * 60 * 60 * 1000); 
+    const nextSpawnTimeMs = lastTimestampMs + (totalHours * 60 * 60 * 1000);
     return new Date(nextSpawnTimeMs);
 }
 
@@ -173,15 +173,15 @@ async function checkGraffitiAlerts() {
     let targetChannel;
     try {
         // Se realiza la costosa llamada a la API cada minuto (comportamiento original)
-        targetChannel = await client.channels.fetch(ALERT_CHANNEL_ID); 
+        targetChannel = await client.channels.fetch(ALERT_CHANNEL_ID);
     } catch (error) {
         console.error(`❌ Error al intentar obtener el canal ${ALERT_CHANNEL_ID}:`, error.message);
-        return; 
+        return;
     }
-    
+
     if (!targetChannel) {
         console.error(`❌ Canal de alertas con ID ${ALERT_CHANNEL_ID} no encontrado después de fetch.`);
-        return; 
+        return;
     }
 
     try {
@@ -189,51 +189,51 @@ async function checkGraffitiAlerts() {
         const alertsToSend = [];
 
         for (const item of allGraffiti) {
-            
+
             let alertFound = false;
-            
+
             // Iteramos sobre el ciclo fijo (12h, 13h, 14h, 15h) para encontrar la alerta activa
             for (const totalHours of ALERT_HOURS_CYCLE) {
-                
+
                 const unlockDate = calculateNextSpawn(item.lastSpawnTimestamp, totalHours);
-                const unlockTimeMs = unlockDate.getTime(); 
+                const unlockTimeMs = unlockDate.getTime();
 
                 // Si el spawn de 15h ya pasó hace más de 11 minutos,
                 // significa que la ventana de alerta para este graffiti ha expirado.
                 if (totalHours === 15 && unlockTimeMs < (nowMs - elevenMinutesMs)) {
-                     break; 
+                     break;
                 }
 
                 // Verificar si la hora de desbloqueo está entre 10 y 11 minutos
                 if (unlockTimeMs > (nowMs + tenMinutesMs) && unlockTimeMs <= (nowMs + elevenMinutesMs)) {
-                    
+
                     const unlockTimestampSec = getUnixTimestampSec(unlockDate);
-                    
+
                     alertsToSend.push({
                         item: item,
-                        offsetHours: totalHours, 
+                        offsetHours: totalHours,
                         unlockTime: `<t:${unlockTimestampSec}:t>`,
                         unlockRelative: `<t:${unlockTimestampSec}:R>`,
                     });
-                    
+
                     // Encontramos el primer y único aviso activo en el ciclo de 12h-15h.
                     alertFound = true;
-                    break; 
+                    break;
                 }
             }
         }
 
         if (alertsToSend.length > 0) {
-            
+
             for (const alert of alertsToSend) {
                 const item = alert.item;
-                
+
                 // --- BÚSQUEDA DE LA IMAGEN ---
-                const graffitiKey = `${item.numero}`; 
-                const imageUrl = GRAFFITI_IMAGES[graffitiKey]; 
+                const graffitiKey = `${item.numero}`;
+                const imageUrl = GRAFFITI_IMAGES[graffitiKey];
                 // -----------------------------
-                
-                const description = 
+
+                const description =
                     `**Nº ${item.numero} | ${item.nombre.toUpperCase()}**\n` +
                     `> Offset: **+${alert.offsetHours}h** (Ciclo)\n` +
                     `> Desbloqueo: ${alert.unlockTime} **(${alert.unlockRelative})**`;
@@ -243,15 +243,15 @@ async function checkGraffitiAlerts() {
                     .setTitle(`🚨 ¡AVISO DE DESBLOQUEO DE GRAFFITIS! (+${alert.offsetHours}h) 🚨`)
                     .setDescription(description)
                     .setTimestamp();
-                
+
                 // --- AÑADIR LA IMAGEN AL EMBED SI LA ENCUENTRA ---
                 if (imageUrl) {
-                    embed.setImage(imageUrl); 
+                    embed.setImage(imageUrl);
                 }
                 // ------------------------------------------------
-          
-                await targetChannel.send({ 
-                    content: `||@here||`, 
+
+                await targetChannel.send({
+                    content: `||@here||`,
                     embeds: [embed],
                 });
             }
@@ -265,7 +265,7 @@ async function checkGraffitiAlerts() {
 
 
 // ---------------------------
-// REGISTRO DE COMANDOS 
+// REGISTRO DE COMANDOS
 // ---------------------------
 const commands = [
     new SlashCommandBuilder()
@@ -280,7 +280,7 @@ const commands = [
         .addStringOption((option) =>
             option.setName("numero").setDescription("Número identificador").setRequired(false)
         ),
-        
+
     new SlashCommandBuilder()
         .setName("setgraf")
         .setDescription("Registra/Actualiza el spawn de un graffiti usando un número identificador.")
@@ -294,15 +294,15 @@ const commands = [
             option
                 .setName("numero")
                 .setDescription("Número del graf.")
-                .setRequired(true) 
+                .setRequired(true)
         )
-        .addIntegerOption((option) => 
+        .addIntegerOption((option) =>
             option
                 .setName("desfase")
                 .setDescription("Minutos transcurridos desde que apareció (ej: 5)")
                 .setRequired(false)
         ),
-        
+
     new SlashCommandBuilder()
         .setName("nextgraff")
         .setDescription("Muestra grafitis cerca de desbloquear, simulando una hora futura.")
@@ -316,7 +316,7 @@ const commands = [
             option
                 .setName("minutos")
                 .setDescription("Minutos a añadir a la hora actual (ej: 8)")
-                .setRequired(true) 
+                .setRequired(true)
         ),
 ].map((command) => command.toJSON());
 
@@ -341,131 +341,131 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 // MANEJO DE INTERACCIONES
 // ---------------------------
 client.on("interactionCreate", async (interaction) => {
-    
+
     // Obtener el nombre a mostrar (alias o username)
     const displayName = getDisplayName(interaction).toUpperCase();
 
     if (interaction.isChatInputCommand()) {
         const commandName = interaction.commandName;
-        const horaStr = interaction.options.getString("hora"); 
+        const horaStr = interaction.options.getString("hora");
 
         // --- LÓGICA /SETGRAF ---
         if (commandName === "setgraf") {
-            await interaction.deferReply(); 
-            
+            await interaction.deferReply();
+
             const nombre = interaction.options.getString("nombre");
-            const numero = interaction.options.getString("numero"); 
-            const desfase = interaction.options.getInteger("desfase") || 0; 
+            const numero = interaction.options.getString("numero");
+            const desfase = interaction.options.getInteger("desfase") || 0;
 
             const desfaseMs = desfase * 60 * 1000;
             const actualTimestampMs = Date.now();
             const spawnTimestampMs = actualTimestampMs - desfaseMs;
-            
+
             try {
                 // Se resetea rescheduleCount a 0 al registrar un nuevo spawn
                 await Graffiti.findOneAndUpdate(
-                    { numero: numero }, 
-                    { 
-                        nombre: nombre, 
+                    { numero: numero },
+                    {
+                        nombre: nombre,
                         lastSpawnTimestamp: spawnTimestampMs,
-                        rescheduleCount: 0, 
-                    }, 
-                    { upsert: true, new: true } 
+                        rescheduleCount: 0,
+                    },
+                    { upsert: true, new: true }
                 );
-                
+
                 const date = new Date(spawnTimestampMs);
                 const hubHour = String(date.getUTCHours()).padStart(2, '0');
                 const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
                 const hubTimeStr = `${hubHour}:${hubMinute}`;
 
                 let replyContent = `✅ Graffiti **${nombre.toUpperCase()} (Nº ${numero})** registrado por **${displayName}**.\n`;
-                
+
                 if (desfase > 0) {
                     replyContent += `*(${desfase} min de desfase aplicados).* \n`;
                 }
 
                 replyContent += `Último spawn registrado: **${hubTimeStr} HUB**. (Próximo aviso en ~12h)`;
 
-                await interaction.editReply({ 
+                await interaction.editReply({
                     content: replyContent
                 });
 
             } catch (error) {
                 console.error("Error al registrar graffiti:", error);
-                await interaction.editReply({ 
-                    content: `❌ Error al guardar el spawn de ${nombre}. Inténtalo de nuevo.`, 
+                await interaction.editReply({
+                    content: `❌ Error al guardar el spawn de ${nombre}. Inténtalo de nuevo.`,
                 });
             }
         }
         // --- LÓGICA /NEXTGRAFF (Ahora con Paginación) ---
         else if (commandName === "nextgraff") {
-            await interaction.deferReply(); 
-            
+            await interaction.deferReply();
+
             const filtro = interaction.options.getString("filtro");
-            const minutesToAdd = interaction.options.getInteger("minutos"); 
-            
+            const minutesToAdd = interaction.options.getInteger("minutos");
+
             const nowMs = Date.now();
-            
+
             const futureDateMs = nowMs + (minutesToAdd * 60 * 1000);
             const futureDate = new Date(futureDateMs);
-            const targetMinutes = futureDate.getUTCMinutes(); 
-            const targetHours = futureDate.getUTCHours(); 
+            const targetMinutes = futureDate.getUTCMinutes();
+            const targetHours = futureDate.getUTCHours();
 
             const targetTimeStr = `${String(targetHours).padStart(2, '0')}:${String(targetMinutes).padStart(2, '0')}`;
-            
+
             const elevenHoursMs = 11 * 60 * 60 * 1000;
-            const fiveMinutesBefore = 5; 
+            const fiveMinutesBefore = 5;
             const CHUNK_SIZE = 5; // El tamaño de cada lote de grafitis
-            
+
             const filteredAndPreparedGraffiti = []; // Array para almacenar los datos listos
 
             try {
-                const allGraffiti = await Graffiti.find({ 
-                    nombre: { $regex: filtro, $options: 'i' } 
-                }).sort({ numero: 1 }); 
+                const allGraffiti = await Graffiti.find({
+                    nombre: { $regex: filtro, $options: 'i' }
+                }).sort({ numero: 1 });
 
                 if (allGraffiti.length === 0) {
-                    return interaction.editReply({ 
-                        content: `⚠️ No se encontraron grafitis que contengan el nombre: **${filtro.toUpperCase()}** en la base de datos.`, 
+                    return interaction.editReply({
+                        content: `⚠️ No se encontraron grafitis que contengan el nombre: **${filtro.toUpperCase()}** en la base de datos.`,
                     });
                 }
-                
+
                 // 1. Preparar y filtrar todos los resultados
                 for (const item of allGraffiti) {
-                    
+
                     const lastSpawnTimestampMs = item.lastSpawnTimestamp;
-                    
+
                     // Si no ha pasado el umbral de 11h, lo saltamos
                     if (nowMs < (lastSpawnTimestampMs + elevenHoursMs)) {
-                        continue; 
+                        continue;
                     }
-                    
+
                     // Usamos 12h de base para la simulación
-                    const unlockDate = calculateNextSpawn(lastSpawnTimestampMs, 12); 
-                    const unlockMinutes = unlockDate.getUTCMinutes(); 
-                    
+                    const unlockDate = calculateNextSpawn(lastSpawnTimestampMs, 12);
+                    const unlockMinutes = unlockDate.getUTCMinutes();
+
                     let isVeryClose = false;
-                    
+
                     // Diferencia de minutos entre el tiempo simulado y el tiempo real de unlock a 12h
                     let difference = (targetMinutes - unlockMinutes + 60) % 60;
-                
+
                     // Está muy cerca si la diferencia es 0, 1, 2, 3, 4, o 5 minutos.
                     if (difference >= 0 && difference <= fiveMinutesBefore) {
                         isVeryClose = true;
                     }
-                    
+
                     const highlightEmoji = isVeryClose ? "🚨 " : "";
                     const highlightText = isVeryClose ? "**" : "";
 
                     const unlockTimestampSec = getUnixTimestampSec(unlockDate);
                     const lastSpawnDate = new Date(lastSpawnTimestampMs);
                     const registrationTimestampSec = getUnixTimestampSec(lastSpawnDate);
-                    
+
                     const hubHour = String(lastSpawnDate.getUTCHours()).padStart(2, '0');
-                    const hubMinute = String(lastSpawnDate.getUTCMinutes()).padStart(2, '0'); 
+                    const hubMinute = String(lastSpawnDate.getUTCMinutes()).padStart(2, '0');
                     const hubTimeStr = `${hubHour}:${hubMinute}`;
-                    
-                    const itemMessage = 
+
+                    const itemMessage =
                         `${highlightEmoji}${highlightText}Nº ${item.numero} | ${item.nombre.toUpperCase()}${highlightText}\n` +
                         `> Registrado: <t:${registrationTimestampSec}:F> (\`${hubTimeStr}\` HUB)\n` +
                         `> Desbloqueo (12h): <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`;
@@ -476,30 +476,30 @@ client.on("interactionCreate", async (interaction) => {
                          isAlarm: isVeryClose,
                     });
                 }
-                
+
                 if (filteredAndPreparedGraffiti.length === 0) {
-                      await interaction.editReply({ 
-                           content: `⚠️ No se encontraron grafitis para **${filtro.toUpperCase()}** que hayan pasado el umbral de 11 horas desde su registro.`, 
+                      await interaction.editReply({
+                           content: `⚠️ No se encontraron grafitis para **${filtro.toUpperCase()}** que hayan pasado el umbral de 11 horas desde su registro.`,
                          });
                           return;
                 }
-                
+
                 let replySent = false;
-                
+
                 // 2. Iterar sobre los resultados en lotes (chunks) de 5
                 for (let i = 0; i < filteredAndPreparedGraffiti.length; i += CHUNK_SIZE) {
                     const chunk = filteredAndPreparedGraffiti.slice(i, i + CHUNK_SIZE);
-                    
+
                     let chunkMessages = [];
                     let chunkButtons = [];
-                    
+
                     chunk.forEach(data => {
                         chunkMessages.push(data.message);
-                        
+
                         // Si el grafiti tiene alarma (está en los 5m), el botón la lleva
                         const highlightEmoji = data.isAlarm ? "🚨 " : "";
                         const buttonLabel = `${highlightEmoji}Timear N° ${data.item.numero}`;
-                        
+
                         chunkButtons.push(
                             new ButtonBuilder()
                                 .setCustomId(`timear_nextgraff_${data.item.numero}`)
@@ -507,29 +507,29 @@ client.on("interactionCreate", async (interaction) => {
                                 .setStyle(ButtonStyle.Primary)
                         );
                     });
-                    
+
                     // 3. Construir el Embed
                     const chunkNumber = Math.floor(i / CHUNK_SIZE) + 1;
                     const totalChunks = Math.ceil(filteredAndPreparedGraffiti.length / CHUNK_SIZE);
-                    
+
                     // Título con la hora simulada
                     const embedTitle = `⏳ Grafitis Cerca de Desbloqueo a las ${targetTimeStr} HUB`;
-                    
+
                     const embed = new EmbedBuilder()
                         .setColor("#3498db")
                         .setTitle(embedTitle)
                         .setDescription(chunkMessages.join('\n\n').trim())
                         .setTimestamp()
                         .setFooter({ text: `Filtro: ${filtro.toUpperCase()} | Lote ${chunkNumber} de ${totalChunks}` });
-                    
+
                     // 4. Construir la Fila de Botones
                     const buttonRow = new ActionRowBuilder().addComponents(chunkButtons);
-                    
-                    const messagePayload = { 
-                        embeds: [embed], 
-                        components: [buttonRow] 
+
+                    const messagePayload = {
+                        embeds: [embed],
+                        components: [buttonRow]
                     };
-                    
+
                     // 5. Enviar el mensaje
                     if (!replySent) {
                         // El primer lote usa editReply para responder la interacción inicial
@@ -548,8 +548,8 @@ client.on("interactionCreate", async (interaction) => {
         }
         // --- LÓGICA /GRAF ---
         else if (commandName === "graf") {
-            
-            if (!horaStr) { 
+
+            if (!horaStr) {
                 return interaction.reply({ content: "Error: Falta la hora.", ephemeral: true });
             }
             const match = horaStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
@@ -559,29 +559,29 @@ client.on("interactionCreate", async (interaction) => {
                     ephemeral: true,
                 });
             }
-            
+
             const ubicacion = interaction.options.getString("ubicacion");
-            const numero = interaction.options.getString("numero"); 
+            const numero = interaction.options.getString("numero");
             const hora = parseInt(match[1]);
             const minutos = parseInt(match[2]);
-            
+
             const today = new Date();
             const baseDate = new Date(
                 Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), hora, minutos)
             );
-            
+
             // Rango de desbloqueo: 12h a 15h
-            const diffs = [12, 13, 14, 15]; 
+            const diffs = [12, 13, 14, 15];
             const horariosPosibles = diffs.map((sum) => {
                 const newDate = new Date(baseDate.getTime());
                 newDate.setUTCHours(baseDate.getUTCHours() + sum);
-                
+
                 const hubHora = String(newDate.getUTCHours()).padStart(2, "0");
                 const hubMinutos = String(newDate.getUTCMinutes()).padStart(2, "0");
                 const hubStr = `${hubHora}:${hubMinutos}`;
-                
+
                 const relativeTimestamp = `<t:${getUnixTimestampSec(newDate)}:R>`;
-                
+
                 return { hub: hubStr, relative: relativeTimestamp, sum: sum };
             });
 
@@ -594,7 +594,7 @@ client.on("interactionCreate", async (interaction) => {
                 .addFields(
                     {
                         name: "⏰ Próximos Posibles Horarios (12h a 15h)",
-                        value: horariosPosibles.map((h) => 
+                        value: horariosPosibles.map((h) =>
                             `**+${h.sum}h**\n> HUB (UTC): \`${h.hub}\` (${h.relative})`
                         ).join("\n\n"),
                         inline: false,
@@ -607,29 +607,29 @@ client.on("interactionCreate", async (interaction) => {
             await interaction.reply({ embeds: [embed] });
         }
         return;
-    } 
-    
+    }
+
     // Manejar interacciones de botones
     if (interaction.isButton()) {
         const customId = interaction.customId;
         const parts = customId.split('_');
         const action = parts[0];
-        
+
         // Determinar el número de graffiti y la acción específica
         let numero;
         let isNextGraffAction = false;
-        
+
         if (action === 'timear' && parts.length === 2) {
             numero = parts[1];
-            
+
             // Forzar un mensaje de error si el botón viene de la alerta (ya no debería existir)
             await interaction.deferUpdate();
-            await interaction.followUp({ 
-                content: '⚠️ Acción deshabilitada. El Timeo ahora solo se realiza con el comando **/setgraf**.', 
-                ephemeral: true 
+            await interaction.followUp({
+                content: '⚠️ Acción deshabilitada. El Timeo ahora solo se realiza con el comando **/setgraf**.',
+                ephemeral: true
             });
             return;
-            
+
         } else if (action === 'timear' && parts[1] === 'nextgraff') {
             // Acción 'timear' proveniente de /nextgraff (timear_nextgraff_[numero])
             numero = parts[2];
@@ -643,8 +643,28 @@ client.on("interactionCreate", async (interaction) => {
             // No es una acción conocida
             return;
         }
-        
-        await interaction.deferUpdate();
+
+        // --- INICIO DEL MANEJO DE ERROR 10062 ---
+        try {
+            await interaction.deferUpdate();
+        } catch (error) {
+            // Error 10062: Unknown interaction (El token de la interacción ha expirado)
+            if (error.code === 10062) {
+                console.log(`⚠️ Interacción de botón expirada (Graffiti N°${numero}).`);
+                
+                try {
+                    await interaction.followUp({
+                        content: '⚠️ Esta interacción ha expirado (más de 15 minutos). Por favor, ejecuta **/nextgraff** de nuevo.',
+                        ephemeral: true
+                    });
+                } catch (followUpError) {
+                }
+                return; // Detenemos la ejecución del resto del código de este botón.
+            }
+            throw error;
+        }
+        // --- FIN DEL MANEJO DE ERROR 10062 ---
+
 
         try {
             // ------------------------------------
@@ -656,8 +676,8 @@ client.on("interactionCreate", async (interaction) => {
                 // 1. Actualizar la BD (se actualiza el spawn y se resetea el contador a 0 para reiniciar el ciclo)
                 const updatedGraffiti = await Graffiti.findOneAndUpdate(
                     { numero: numero },
-                    { 
-                        $set: { 
+                    {
+                        $set: {
                             lastSpawnTimestamp: nowTimestampMs,
                             rescheduleCount: 0, // Reinicia el ciclo base (12h)
                         }
@@ -667,18 +687,18 @@ client.on("interactionCreate", async (interaction) => {
 
                 if (updatedGraffiti) {
                     // El nuevo desbloqueo es +12h desde ahora
-                    const unlockDate = calculateNextSpawn(updatedGraffiti.lastSpawnTimestamp, 12); 
+                    const unlockDate = calculateNextSpawn(updatedGraffiti.lastSpawnTimestamp, 12);
                     const unlockTimestampSec = getUnixTimestampSec(unlockDate);
-                    
+
                     const newEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
 
                     // --- LÓGICA PARA BOTÓN /NEXTGRAFF (Incluye deshabilitar mensajes hermanos) ---
-                    
+
                     // 2. Modificar el mensaje/Embed del mensaje clickeado
                     let newDescription = newEmbed.data.description;
-                    
+
                     const timearConfirmation = `**✅ TIMEADO POR ${displayName}**\n> Nuevo Desbloqueo (12h): <t:${unlockTimestampSec}:t> (<t:${unlockTimestampSec}:R>)`;
-                    
+
                     // Reemplazar la línea del graffiti timeado con el estado de timeado
                     if (newDescription) {
                         const lines = newDescription.split('\n');
@@ -686,9 +706,9 @@ client.on("interactionCreate", async (interaction) => {
                         for (let i = 0; i < lines.length; i++) {
                             // Buscar la línea que contiene el número del grafiti
                             if (lines[i].includes(`Nº ${numero}`)) {
-                                lines[i] = timearConfirmation; 
+                                lines[i] = timearConfirmation;
                                 found = true;
-                                
+
                                 // Eliminar líneas subsecuentes (Registrado, Desbloqueo)
                                 // Aseguramos que solo borramos las líneas de detalles (que empiezan con '>')
                                 let deleteCount = 0;
@@ -698,19 +718,19 @@ client.on("interactionCreate", async (interaction) => {
                                         deleteCount++;
                                     }
                                 }
-                                if (found) break; 
+                                if (found) break;
                             }
                         }
-                        
+
                         // Recomponer la descripción, quitando las líneas de borrado
                         newDescription = lines.filter(line => line !== '---LINE_TO_REMOVE---').join('\n').trim();
-                        
+
                         // Actualizar Título y Descripción del Embed
                         newEmbed.setTitle(`✅ Graffiti N°${numero} - ${updatedGraffiti.nombre.toUpperCase()} TIMEADO`)
                                      .setDescription(newDescription)
-                                     .setColor("#2ecc71"); 
+                                     .setColor("#2ecc71");
                     }
-                    
+
                     // 3. Deshabilitar todos los botones en el mensaje clickeado (y cambiar el label del pulsado)
                     const disabledComponents = interaction.message.components.map(row => {
                         const newRow = ActionRowBuilder.from(row);
@@ -724,11 +744,11 @@ client.on("interactionCreate", async (interaction) => {
                         return newRow;
                     });
 
-                    await interaction.message.edit({ 
-                        embeds: [newEmbed], 
+                    await interaction.message.edit({
+                        embeds: [newEmbed],
                         components: disabledComponents
                     });
-                    
+
                 } else {
                     await interaction.followUp({ content: '❌ Error: Graffiti no encontrado o ya eliminado.', ephemeral: true });
                 }
@@ -736,36 +756,37 @@ client.on("interactionCreate", async (interaction) => {
 
         } catch (error) {
             console.error("Error al manejar interacción de botón:", error);
-            await interaction.followUp({ content: '❌ Ocurrió un error al procesar el botón.', ephemeral: true });
+            // Si hubo un error después de deferUpdate, usamos followUp
+            await interaction.followUp({ content: '❌ Ocurrió un error al procesar el botón. Intenta usar /setgraf.', ephemeral: true });
         }
     }
 });
 
 // ----------------------------------------
-// INICIO PRINCIPAL DE LA APLICACIÓN 
+// INICIO PRINCIPAL DE LA APLICACIÓN
 // ----------------------------------------
 
 async function main() {
     console.log("Iniciando Bot y Conexión...");
 
     await connectDB();
-    
+
     await client.login(process.env.TOKEN);
     console.log(`✅ Conectado como ${client.user.tag}`);
-    
+
     // Iniciar el temporizador SÓLO cuando el cliente esté listo
     client.once('ready', () => {
         console.log(`✅ Bot ${client.user.tag} está listo y en línea.`);
-        
+
         checkGraffitiAlerts();
-        setInterval(checkGraffitiAlerts, 60 * 1000); 
+        setInterval(checkGraffitiAlerts, 60 * 1000);
         console.log(`✅ Tarea de verificación de alertas iniciada (cada 1 minuto).`);
     });
 
     const app = express();
     app.get('/', (req, res) => res.send('Bot activo ✅'));
-    
-    const port = process.env.PORT || 3000; 
+
+    const port = process.env.PORT || 3000;
 
     app.listen(port, () => {
         console.log(`Servidor web Express activo en el puerto ${port}`);
