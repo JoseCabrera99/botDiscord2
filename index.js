@@ -8,19 +8,11 @@ import {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
-    AttachmentBuilder,
 } from "discord.js";
 import dotenv from "dotenv";
 import express from 'express';
 import mongoose from "mongoose";
 dotenv.config();
-
-// ----------------------------------------
-// CONSTANTES Y CONFIGURACIÓN DE TIEMPO 🕒
-// ----------------------------------------
-const ONE_HOUR_MS = 60 * 60 * 1000;
-const TWELVE_HOURS_MS = 12 * ONE_HOUR_MS;
-const TWENTY_FOUR_HOURS_MS = 24 * ONE_HOUR_MS;
 
 // Ciclo de alerta fijo (12h, 13h, 14h, 15h)
 const ALERT_HOURS_CYCLE = [12, 13, 14, 15];
@@ -189,9 +181,6 @@ async function checkGraffitiAlerts() {
         const alertsToSend = [];
 
         for (const item of allGraffiti) {
-
-            let alertFound = false;
-
             // Iteramos sobre el ciclo fijo (12h, 13h, 14h, 15h) para encontrar la alerta activa
             for (const totalHours of ALERT_HOURS_CYCLE) {
 
