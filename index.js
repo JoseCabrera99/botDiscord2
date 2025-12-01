@@ -275,9 +275,14 @@ const commands = [
                 .setRequired(false)
         ),
     
-    new SlashCommandBuilder()
+        new SlashCommandBuilder()
         .setName("timear")
-        .setDescription("Abre un menú para timear grafitis de forma rápida."),
+        .setDescription("Abre un menú para timear grafitis que coincidan con un filtro.")
+        .addStringOption(option =>
+            option.setName("filtro")
+                .setDescription("Texto para buscar en el nombre (ej: davis, rancho)")
+                .setRequired(true) 
+        ),
 
     new SlashCommandBuilder()
         .setName("nextgraff")
@@ -327,17 +332,23 @@ client.on("interactionCreate", async (interaction) => {
         // --- LÓGICA /TIMEAR  ---
         if (commandName === "timear") {
             await interaction.deferReply({ ephemeral: true });
+            const filtro = interaction.options.getString("filtro");
+            const MAX_OPTIONS = 25;
+            const filteredGraffiti = await Graffiti.find({
+                nombre: { $regex: filtro, $options: 'i' }
+            }).sort({ numero: 1 }).limit(MAX_OPTIONS);
 
-            const allGraffiti = await Graffiti.find({}).sort({ numero: 1 });
-
-            if (allGraffiti.length === 0) {
-                return interaction.editReply({ content: "⚠️ No hay grafitis registrados en la base de datos.", ephemeral: true });
+            if (filteredGraffiti.length === 0) {
+                return interaction.editReply({ 
+                    content: `⚠️ No se encontraron grafitis que coincidan con el filtro: **${filtro.toUpperCase()}**.`, 
+                    ephemeral: true 
+                });
             }
 
-            const options = allGraffiti.map(g => ({
+            const options = filteredGraffiti.map(g => ({
                 label: `Nº ${g.numero} | ${g.nombre.toUpperCase()}`,
-                value: g.numero,
-            })).slice(0, 25); 
+                value: g.numero, 
+            }));
 
             const selectMenu = new StringSelectMenuBuilder()
                 .setCustomId('grafitti_selector')
@@ -359,8 +370,17 @@ client.on("interactionCreate", async (interaction) => {
             const desfaseRow = new ActionRowBuilder().addComponents(desfaseInput);
 
             modal.addComponents(selectRow, desfaseRow);
-            
-            await interaction.showModal(modal);
+            try {
+                await interaction.showModal(modal);
+            } catch (error) {
+                console.error("❌ ERROR CRÍTICO al mostrar el Modal:", error.message);
+                
+                // Enviamos un mensaje de error visible al usuario
+                await interaction.editReply({ 
+                    content: `❌ Error interno: No se pudo abrir el formulario. Revisa la consola del bot.`, 
+                    ephemeral: true 
+                });
+            }
             return;
         }
         
