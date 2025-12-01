@@ -418,6 +418,7 @@ client.on("interactionCreate", async (interaction) => {
                     content: `❌ Error al guardar el spawn de ${nombre}. Inténtalo de nuevo.`,
                 });
             }
+            return;
         }
         // --- LÓGICA /NEXTGRAFF ---
         else if (commandName === "nextgraff") {
@@ -546,6 +547,7 @@ client.on("interactionCreate", async (interaction) => {
                 console.error("Error en /nextgraff:", error);
                 await interaction.editReply("❌ Ocurrió un error al consultar la base de datos.");
             }
+            return;
         }
         // --- LÓGICA /GRAF ---
         else if (commandName === "graf") {
@@ -598,110 +600,115 @@ client.on("interactionCreate", async (interaction) => {
                 .setFooter({ text: "Midnight • Grafitti" });
 
             await interaction.reply({ embeds: [embed] });
+            return;
         }
         return;
     }
     
-    // --- NUEVO MANEJO DE SELECCIÓN DEL SELECT MENU ---
-    if (interaction.isStringSelectMenu() && interaction.customId === 'timear_grafitti_select') {
-        const selectedGraffitiNumber = interaction.values[0];
-        
-        // Creamos y mostramos el Modal para pedir el desfase.
-        const desfaseInput = new TextInputBuilder()
-            .setCustomId('desfase_input')
-            .setLabel(`Desfase (Minutos) para Grafitti N° ${selectedGraffitiNumber}`)
-            .setStyle(TextInputStyle.Short)
-            .setRequired(false)
-            .setPlaceholder('Ej: 5 (Minutos transcurridos desde que apareció)');
-
-        // Usaremos un Custom ID que incluya el número del graffiti para pasarlo al Modal Submit
-        const modal = new ModalBuilder()
-            .setCustomId(`modal_timear_submit_${selectedGraffitiNumber}`) 
-            .setTitle(`⏱️ Timear N° ${selectedGraffitiNumber} Rápido`);
-
-        const desfaseRow = new ActionRowBuilder().addComponents(desfaseInput);
-
-        modal.addComponents(desfaseRow);
-        
-        try {
-            await interaction.showModal(modal);
+    // 2. MANEJO DE SELECCIÓN DEL SELECT MENU
+    else if (interaction.isStringSelectMenu()) {
+        if (interaction.customId === 'timear_grafitti_select') {
+            const selectedGraffitiNumber = interaction.values[0];
             
-            // Opcional: Desactivamos el select menu original para evitar doble-click
-            const disabledComponents = interaction.message.components.map(row => {
-                const newRow = ActionRowBuilder.from(row);
-                newRow.components.forEach(comp => comp.setDisabled(true));
-                return newRow;
-            });
+            // Creamos y mostramos el Modal para pedir el desfase.
+            const desfaseInput = new TextInputBuilder()
+                .setCustomId('desfase_input')
+                .setLabel(`Desfase (Minutos) para Grafitti N° ${selectedGraffitiNumber}`)
+                .setStyle(TextInputStyle.Short)
+                .setRequired(false)
+                .setPlaceholder('Ej: 5 (Minutos transcurridos desde que apareció)');
 
-            await interaction.editReply({ 
-                content: interaction.message.content + "\n\n✅ Graffiti seleccionado. Ingresa el desfase en el formulario.",
-                components: disabledComponents 
-            });
+            // Usaremos un Custom ID que incluya el número del graffiti para pasarlo al Modal Submit
+            const modal = new ModalBuilder()
+                .setCustomId(`modal_timear_submit_${selectedGraffitiNumber}`) 
+                .setTitle(`⏱️ Timear N° ${selectedGraffitiNumber} Rápido`);
+
+            const desfaseRow = new ActionRowBuilder().addComponents(desfaseInput);
+
+            modal.addComponents(desfaseRow);
             
-        } catch (error) {
-            console.error("❌ ERROR al mostrar el Modal desde el Select Menu:", error.message);
-            // El token ya fue consumido por showModal (o falló), usamos followUp.
-            await interaction.followUp({ 
-                content: `❌ Error interno: No se pudo abrir el formulario para el Grafitti N° ${selectedGraffitiNumber}.`, 
-                flags: EPHEMERAL_FLAG
-            });
+            try {
+                await interaction.showModal(modal);
+                
+                // Opcional: Desactivamos el select menu original para evitar doble-click
+                const disabledComponents = interaction.message.components.map(row => {
+                    const newRow = ActionRowBuilder.from(row);
+                    newRow.components.forEach(comp => comp.setDisabled(true));
+                    return newRow;
+                });
+
+                await interaction.editReply({ 
+                    content: interaction.message.content + "\n\n✅ Graffiti seleccionado. Ingresa el desfase en el formulario.",
+                    components: disabledComponents 
+                });
+                
+            } catch (error) {
+                console.error("❌ ERROR al mostrar el Modal desde el Select Menu:", error.message);
+                // El token ya fue consumido por showModal (o falló), usamos followUp.
+                await interaction.followUp({ 
+                    content: `❌ Error interno: No se pudo abrir el formulario para el Grafitti N° ${selectedGraffitiNumber}.`, 
+                    flags: EPHEMERAL_FLAG
+                });
+            }
+            return;
         }
-        return;
     }
 
     // --- MANEJO DE SUMISIÓN DEL MODAL ---
-    if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_timear_submit_')) {
-        await interaction.deferReply();
+    else if (interaction.isModalSubmit()) {
+        if (interaction.customId.startsWith('modal_timear_submit_')) {
+            await interaction.deferReply();
 
-        // Extraemos el número del graffiti del custom ID
-        const selectedGraffitiNumber = interaction.customId.split('_').pop(); 
-        
-        const desfaseText = interaction.fields.getString('desfase_input');
-        
-        const desfase = parseInt(desfaseText) || 0;
-        
-        // CÁLCULO DEL NUEVO SPAWN
-        const desfaseMs = desfase * 60 * 1000;
-        const actualTimestampMs = Date.now();
-        const spawnTimestampMs = actualTimestampMs - desfaseMs;
-        
-        try {
-            const updatedGraffiti = await Graffiti.findOneAndUpdate(
-                { numero: selectedGraffitiNumber },
-                { lastSpawnTimestamp: spawnTimestampMs },
-                { new: true }
-            );
-
-            if (!updatedGraffiti) {
-                 return interaction.editReply(`❌ Error: No se encontró el graffiti con número **${selectedGraffitiNumber}**.`);
-            }
-
-            const date = new Date(spawnTimestampMs);
-            const hubHour = String(date.getUTCHours()).padStart(2, '0');
-            const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
-            const hubTimeStr = `${hubHour}:${hubMinute}`;
-
-            let replyContent = `✅ Graffiti **${updatedGraffiti.nombre.toUpperCase()} (Nº ${updatedGraffiti.numero})** timeado por **${displayName}**.\n`;
-
-            if (desfase > 0) {
-                replyContent += `*(${desfase} min de desfase aplicados).* \n`;
-            }
-
-            replyContent += `Último spawn registrado: **${hubTimeStr} HUB**. (Próximo aviso en ~12h)`;
-
-            await interaction.editReply({ content: replyContent });
+            // Extraemos el número del graffiti del custom ID
+            const selectedGraffitiNumber = interaction.customId.split('_').pop(); 
             
-        } catch (error) {
-            console.error("Error al timear graffiti desde el modal:", error);
-            await interaction.editReply({
-                content: `❌ Error al timear el graffiti **Nº ${selectedGraffitiNumber}**. Inténtalo de nuevo.`,
-            });
+            try {
+                const desfaseText = interaction.fields.getTextInputValue('desfase_input');
+                
+                const desfase = parseInt(desfaseText) || 0;
+                
+                // CÁLCULO DEL NUEVO SPAWN
+                const desfaseMs = desfase * 60 * 1000;
+                const actualTimestampMs = Date.now();
+                const spawnTimestampMs = actualTimestampMs - desfaseMs;
+                
+                const updatedGraffiti = await Graffiti.findOneAndUpdate(
+                    { numero: selectedGraffitiNumber },
+                    { lastSpawnTimestamp: spawnTimestampMs },
+                    { new: true }
+                );
+
+                if (!updatedGraffiti) {
+                     return interaction.editReply(`❌ Error: No se encontró el graffiti con número **${selectedGraffitiNumber}**.`);
+                }
+
+                const date = new Date(spawnTimestampMs);
+                const hubHour = String(date.getUTCHours()).padStart(2, '0');
+                const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
+                const hubTimeStr = `${hubHour}:${hubMinute}`;
+
+                let replyContent = `✅ Graffiti **${updatedGraffiti.nombre.toUpperCase()} (Nº ${updatedGraffiti.numero})** timeado por **${displayName}**.\n`;
+
+                if (desfase > 0) {
+                    replyContent += `*(${desfase} min de desfase aplicados).* \n`;
+                }
+
+                replyContent += `Último spawn registrado: **${hubTimeStr} HUB**. (Próximo aviso en ~12h)`;
+
+                await interaction.editReply({ content: replyContent });
+                
+            } catch (error) {
+                console.error("Error al timear graffiti desde el modal:", error);
+                await interaction.editReply({
+                    content: `❌ Error al timear el graffiti **Nº ${selectedGraffitiNumber}**. Inténtalo de nuevo.`,
+                });
+            }
+            return;
         }
-        return;
     }
     
     // --- MANEJO DE BOTONES ---
-    if (interaction.isButton()) {
+    else if (interaction.isButton()) {
         const customId = interaction.customId;
         const parts = customId.split('_');
         const action = parts[0];
@@ -713,7 +720,7 @@ client.on("interactionCreate", async (interaction) => {
             numero = parts[2];
             isNextGraffAction = true;
         } else {
-                          return; 
+             return; 
         }
 
         try {
@@ -727,6 +734,7 @@ client.on("interactionCreate", async (interaction) => {
                         flags: EPHEMERAL_FLAG
                     });
                 } catch (followUpError) {
+                    
                 }                return; 
             }
             throw error;
@@ -800,6 +808,7 @@ client.on("interactionCreate", async (interaction) => {
             console.error("Error al manejar interacción de botón:", error);
             await interaction.followUp({ content: '❌ Error al procesar el botón.', flags: EPHEMERAL_FLAG });
         }
+        return;
     }
 });
 
