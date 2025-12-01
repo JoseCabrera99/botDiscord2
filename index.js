@@ -20,6 +20,7 @@ dotenv.config();
 
 // Ciclo de alerta fijo (12h, 13h, 14h, 15h)
 const ALERT_HOURS_CYCLE = [12, 13, 14, 15];
+const EPHEMERAL_FLAG = 64; // Reemplaza ephemeral: true
 
 // Imagenes del graff
 const GRAFFITI_IMAGES = {
@@ -331,55 +332,44 @@ client.on("interactionCreate", async (interaction) => {
 
         // --- LÓGICA /TIMEAR  ---
         if (commandName === "timear") {
+            await interaction.deferReply({ flags: EPHEMERAL_FLAG });
             const filtro = interaction.options.getString("filtro");
             const MAX_OPTIONS = 25;
-            const filteredGraffiti = await Graffiti.find({
-                nombre: { $regex: filtro, $options: 'i' }
-            }).sort({ numero: 1 }).limit(MAX_OPTIONS);
-
-            if (filteredGraffiti.length === 0) {
-                return interaction.reply({ 
-                    content: `⚠️ No se encontraron grafitis que coincidan con el filtro: **${filtro.toUpperCase()}**.`, 
-                    ephemeral: true 
-                });
-            }
-
-            const options = filteredGraffiti.map(g => ({
-                label: `Nº ${g.numero} | ${g.nombre.toUpperCase()}`,
-                value: g.numero, 
-            }));
-
-            const selectMenu = new StringSelectMenuBuilder()
-                .setCustomId('grafitti_selector')
-                .setPlaceholder('Selecciona el graffiti a timear...')
-                .addOptions(options);
-
-            const desfaseInput = new TextInputBuilder()
-                .setCustomId('desfase_input')
-                .setLabel("Desfase (Minutos - Opcional)")
-                .setStyle(TextInputStyle.Short)
-                .setRequired(false)
-                .setPlaceholder('Ej: 5 (Minutos transcurridos desde que apareció)');
-
-            const modal = new ModalBuilder()
-                .setCustomId('modal_timear_grafitti')
-                .setTitle('⏱️ Timear Graffiti Rápido');
-
-            const selectRow = new ActionRowBuilder().addComponents(selectMenu);
-            const desfaseRow = new ActionRowBuilder().addComponents(desfaseInput);
-
-            modal.addComponents(selectRow, desfaseRow);
             try {
-                await interaction.showModal(modal);
-            } catch (error) {
-                console.error("❌ ERROR CRÍTICO al mostrar el Modal:", error.message);
+                const filteredGraffiti = await Graffiti.find({
+                    nombre: { $regex: filtro, $options: 'i' }
+                }).sort({ numero: 1 }).limit(MAX_OPTIONS);
+    
+                if (filteredGraffiti.length === 0) {
+                    return interaction.editReply({ 
+                        content: `⚠️ No se encontraron grafitis que coincidan con el filtro: **${filtro.toUpperCase()}**.`, 
+                    });
+                }
                 
-                // Enviamos un mensaje de error visible al usuario
-                await interaction.reply({ 
-                    content: `❌ Error interno: No se pudo abrir el formulario. Revisa la consola del bot.`, 
-                    ephemeral: true 
+                const options = filteredGraffiti.map(g => ({
+                    label: `Nº ${g.numero} | ${g.nombre.toUpperCase()}`,
+                    value: g.numero, 
+                }));
+                
+                const selectMenu = new StringSelectMenuBuilder()
+                    .setCustomId('timear_grafitti_select') // Nuevo Custom ID
+                    .setPlaceholder('Selecciona el graffiti a timear...')
+                    .addOptions(options);
+    
+                const actionRow = new ActionRowBuilder().addComponents(selectMenu);
+                
+                // Respondemos con un mensaje que contiene el Select Menu
+                await interaction.editReply({
+                    content: `**Selecciona el graffiti** que deseas timear con el filtro: **${filtro.toUpperCase()}**`,
+                    components: [actionRow],
+                });
+            } catch (error) {
+                console.error("❌ ERROR al buscar en /timear:", error);
+                await interaction.editReply({ 
+                    content: `❌ Error interno al buscar grafitis.`, 
                 });
             }
+            
             return;
         }
         
@@ -503,6 +493,10 @@ client.on("interactionCreate", async (interaction) => {
                     });
                     return;
                 }
+                
+                const targetHour = String(new Date(futureDateMs).getUTCHours()).padStart(2, '0');
+                const targetMinute = String(new Date(futureDateMs).getUTCMinutes()).padStart(2, '0');
+                const targetTimeStr = `${targetHour}:${targetMinute}`;
 
                 let replySent = false;
 
@@ -557,13 +551,13 @@ client.on("interactionCreate", async (interaction) => {
         else if (commandName === "graf") {
             const horaStr = interaction.options.getString("hora");
             if (!horaStr) {
-                return interaction.reply({ content: "Error: Falta la hora.", ephemeral: true });
+                return interaction.reply({ content: "Error: Falta la hora.", flags: EPHEMERAL_FLAG });
             }
             const match = horaStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
             if (!match) {
                 return interaction.reply({
                     content: "⚠️ Formato de hora inválido. Usa HH:MM (por ejemplo, 20:05)",
-                    ephemeral: true,
+                    flags: EPHEMERAL_FLAG,
                 });
             }
 
@@ -607,12 +601,61 @@ client.on("interactionCreate", async (interaction) => {
         }
         return;
     }
+    
+    // --- NUEVO MANEJO DE SELECCIÓN DEL SELECT MENU ---
+    if (interaction.isStringSelectMenu() && interaction.customId === 'timear_grafitti_select') {
+        const selectedGraffitiNumber = interaction.values[0];
+        
+        // Creamos y mostramos el Modal para pedir el desfase.
+        const desfaseInput = new TextInputBuilder()
+            .setCustomId('desfase_input')
+            .setLabel(`Desfase (Minutos) para Grafitti N° ${selectedGraffitiNumber}`)
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder('Ej: 5 (Minutos transcurridos desde que apareció)');
 
-    // --- MANEJO DE SUMISIÓN DEL MODAL  ---
-    if (interaction.isModalSubmit() && interaction.customId === 'modal_timear_grafitti') {
+        // Usaremos un Custom ID que incluya el número del graffiti para pasarlo al Modal Submit
+        const modal = new ModalBuilder()
+            .setCustomId(`modal_timear_submit_${selectedGraffitiNumber}`) 
+            .setTitle(`⏱️ Timear N° ${selectedGraffitiNumber} Rápido`);
+
+        const desfaseRow = new ActionRowBuilder().addComponents(desfaseInput);
+
+        modal.addComponents(desfaseRow);
+        
+        try {
+            await interaction.showModal(modal);
+            
+            // Opcional: Desactivamos el select menu original para evitar doble-click
+            const disabledComponents = interaction.message.components.map(row => {
+                const newRow = ActionRowBuilder.from(row);
+                newRow.components.forEach(comp => comp.setDisabled(true));
+                return newRow;
+            });
+
+            await interaction.editReply({ 
+                content: interaction.message.content + "\n\n✅ Graffiti seleccionado. Ingresa el desfase en el formulario.",
+                components: disabledComponents 
+            });
+            
+        } catch (error) {
+            console.error("❌ ERROR al mostrar el Modal desde el Select Menu:", error.message);
+            // El token ya fue consumido por showModal (o falló), usamos followUp.
+            await interaction.followUp({ 
+                content: `❌ Error interno: No se pudo abrir el formulario para el Grafitti N° ${selectedGraffitiNumber}.`, 
+                flags: EPHEMERAL_FLAG
+            });
+        }
+        return;
+    }
+
+    // --- MANEJO DE SUMISIÓN DEL MODAL ---
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_timear_submit_')) {
         await interaction.deferReply();
 
-        const selectedGraffitiNumber = interaction.fields.getString('grafitti_selector');
+        // Extraemos el número del graffiti del custom ID
+        const selectedGraffitiNumber = interaction.customId.split('_').pop(); 
+        
         const desfaseText = interaction.fields.getString('desfase_input');
         
         const desfase = parseInt(desfaseText) || 0;
@@ -670,12 +713,7 @@ client.on("interactionCreate", async (interaction) => {
             numero = parts[2];
             isNextGraffAction = true;
         } else {
-             await interaction.deferUpdate();
-             await interaction.followUp({ 
-                 content: '⚠️ Interacción no válida o desactualizada.', 
-                 ephemeral: true 
-             });
-            return;
+                          return; 
         }
 
         try {
@@ -686,10 +724,10 @@ client.on("interactionCreate", async (interaction) => {
                 try {
                     await interaction.followUp({
                         content: '⚠️ Esta interacción ha expirado (más de 15 minutos). Por favor, ejecuta **/nextgraff** de nuevo.',
-                        ephemeral: true
+                        flags: EPHEMERAL_FLAG
                     });
                 } catch (followUpError) {
-                }                return; 
+                }                return; 
             }
             throw error;
         }
@@ -742,7 +780,7 @@ client.on("interactionCreate", async (interaction) => {
                         newRow.components.forEach(button => {
                             if (button.data.custom_id === customId) {
                                 button.setLabel(`Timeado por ${displayName}`)
-                                      .setStyle(ButtonStyle.Success);
+                                     .setStyle(ButtonStyle.Success);
                             }
                             button.setDisabled(true);
                         });
@@ -755,12 +793,12 @@ client.on("interactionCreate", async (interaction) => {
                     });
 
                 } else {
-                    await interaction.followUp({ content: '❌ Error: Graffiti no encontrado.', ephemeral: true });
+                    await interaction.followUp({ content: '❌ Error: Graffiti no encontrado.', flags: EPHEMERAL_FLAG });
                 }
             }
         } catch (error) {
             console.error("Error al manejar interacción de botón:", error);
-            await interaction.followUp({ content: '❌ Error al procesar el botón.', ephemeral: true });
+            await interaction.followUp({ content: '❌ Error al procesar el botón.', flags: EPHEMERAL_FLAG });
         }
     }
 });
