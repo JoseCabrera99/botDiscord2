@@ -8,6 +8,10 @@ import {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
+    StringSelectMenuBuilder,
+    TextInputBuilder,
+    TextInputStyle,
+    ModalBuilder,
 } from "discord.js";
 import dotenv from "dotenv";
 import express from 'express';
@@ -83,7 +87,7 @@ const ALERT_CHANNEL_ID = process.env.ALERT_CHANNEL_ID;
 let alertChannelCache = null;
 
 // ----------------------------------------
-// ESQUEMA Y MODELO DE MONGOOSE
+// ESQUEMA Y MODELO DE MONGOOSE 
 // ----------------------------------------
 
 const GraffitiSchema = new mongoose.Schema({
@@ -126,17 +130,11 @@ async function connectDB() {
 
 const getUnixTimestampSec = (date) => Math.floor(date.getTime() / 1000);
 
-/**
-* Calcula el tiempo exacto de desbloqueo teórico (lastTimestamp + totalHours)
-*/
 function calculateNextSpawn(lastTimestampMs, totalHours) {
     const nextSpawnTimeMs = lastTimestampMs + (totalHours * 60 * 60 * 1000);
     return new Date(nextSpawnTimeMs);
 }
 
-/**
- * Obtiene el alias del miembro o, si no tiene, su nombre de usuario.
- */
 const getDisplayName = (interaction) => {
     if (interaction.member) {
         return interaction.member.nickname || interaction.user.username;
@@ -145,7 +143,7 @@ const getDisplayName = (interaction) => {
 };
 
 // ----------------------------------------
-// TAREA PROGRAMADA DE AVISO
+// TAREA PROGRAMADA DE AVISO 
 // ----------------------------------------
 
 async function checkGraffitiAlerts() {
@@ -154,8 +152,7 @@ async function checkGraffitiAlerts() {
         return;
     }
 
-    // --- OPTIMIZACIÓN DE CACHÉ ---
-    // Si la caché está vacía (por reinicio o error), intentamos recuperar el canal
+    // Usar la caché si está disponible
     if (!alertChannelCache) {
         try {
             console.log("⚠️ Cache de canal vacío. Intentando recuperar...");
@@ -166,9 +163,7 @@ async function checkGraffitiAlerts() {
         }
     }
     
-    // Usamos la variable local, no hacemos fetch
     const targetChannel = alertChannelCache;
-
     if (!targetChannel) return;
 
     const nowMs = Date.now();
@@ -209,13 +204,8 @@ async function checkGraffitiAlerts() {
         if (alertsToSend.length > 0) {
             for (const alert of alertsToSend) {
                 const item = alert.item;
-
-                // --- BÚSQUEDA DE LA IMAGEN ---
-                // Se asegura de convertir a string para buscar en el objeto
                 const graffitiKey = `${item.numero}`;
-                // Intenta buscar la imagen, si no existe usa una por defecto o null
                 const imageUrl = GRAFFITI_IMAGES[graffitiKey]; 
-                // -----------------------------
 
                 const description =
                     `**Nº ${item.numero} | ${item.nombre.toUpperCase()}**\n` +
@@ -247,7 +237,7 @@ async function checkGraffitiAlerts() {
 
 
 // ---------------------------
-// REGISTRO DE COMANDOS
+// REGISTRO DE COMANDOS 
 // ---------------------------
 const commands = [
     new SlashCommandBuilder()
@@ -284,6 +274,10 @@ const commands = [
                 .setDescription("Minutos transcurridos desde que apareció (ej: 5)")
                 .setRequired(false)
         ),
+    
+    new SlashCommandBuilder()
+        .setName("timear")
+        .setDescription("Abre un menú para timear grafitis de forma rápida."),
 
     new SlashCommandBuilder()
         .setName("nextgraff")
@@ -326,10 +320,51 @@ client.on("interactionCreate", async (interaction) => {
 
     const displayName = getDisplayName(interaction).toUpperCase();
 
+    // --- MANEJO DE COMANDOS DE BARRA ---
     if (interaction.isChatInputCommand()) {
         const commandName = interaction.commandName;
-        const horaStr = interaction.options.getString("hora");
 
+        // --- LÓGICA /TIMEAR  ---
+        if (commandName === "timear") {
+            await interaction.deferReply({ ephemeral: true });
+
+            const allGraffiti = await Graffiti.find({}).sort({ numero: 1 });
+
+            if (allGraffiti.length === 0) {
+                return interaction.editReply({ content: "⚠️ No hay grafitis registrados en la base de datos.", ephemeral: true });
+            }
+
+            const options = allGraffiti.map(g => ({
+                label: `Nº ${g.numero} | ${g.nombre.toUpperCase()}`,
+                value: g.numero,
+            })).slice(0, 25); 
+
+            const selectMenu = new StringSelectMenuBuilder()
+                .setCustomId('grafitti_selector')
+                .setPlaceholder('Selecciona el graffiti a timear...')
+                .addOptions(options);
+
+            const desfaseInput = new TextInputBuilder()
+                .setCustomId('desfase_input')
+                .setLabel("Desfase (Minutos - Opcional)")
+                .setStyle(TextInputStyle.Short)
+                .setRequired(false)
+                .setPlaceholder('Ej: 5 (Minutos transcurridos desde que apareció)');
+
+            const modal = new ModalBuilder()
+                .setCustomId('modal_timear_grafitti')
+                .setTitle('⏱️ Timear Graffiti Rápido');
+
+            const selectRow = new ActionRowBuilder().addComponents(selectMenu);
+            const desfaseRow = new ActionRowBuilder().addComponents(desfaseInput);
+
+            modal.addComponents(selectRow, desfaseRow);
+
+            await interaction.editReply({ content: 'Abriendo formulario...', ephemeral: true });
+            await interaction.showModal(modal);
+            return;
+        }
+        
         // --- LÓGICA /SETGRAF ---
         if (commandName === "setgraf") {
             await interaction.deferReply();
@@ -385,10 +420,6 @@ client.on("interactionCreate", async (interaction) => {
 
             const nowMs = Date.now();
             const futureDateMs = nowMs + (minutesToAdd * 60 * 1000);
-            const futureDate = new Date(futureDateMs);
-            const targetMinutes = futureDate.getUTCMinutes();
-            const targetHours = futureDate.getUTCHours();
-            const targetTimeStr = `${String(targetHours).padStart(2, '0')}:${String(targetMinutes).padStart(2, '0')}`;
 
             const elevenHoursMs = 11 * 60 * 60 * 1000;
             const fiveMinutesBefore = 5;
@@ -416,7 +447,8 @@ client.on("interactionCreate", async (interaction) => {
 
                     const unlockDate = calculateNextSpawn(lastSpawnTimestampMs, 12);
                     const unlockMinutes = unlockDate.getUTCMinutes();
-
+                    const targetMinutes = new Date(futureDateMs).getUTCMinutes();
+                    
                     let isVeryClose = false;
                     let difference = (targetMinutes - unlockMinutes + 60) % 60;
 
@@ -505,6 +537,7 @@ client.on("interactionCreate", async (interaction) => {
         }
         // --- LÓGICA /GRAF ---
         else if (commandName === "graf") {
+            const horaStr = interaction.options.getString("hora");
             if (!horaStr) {
                 return interaction.reply({ content: "Error: Falta la hora.", ephemeral: true });
             }
@@ -557,6 +590,55 @@ client.on("interactionCreate", async (interaction) => {
         return;
     }
 
+    // --- MANEJO DE SUMISIÓN DEL MODAL  ---
+    if (interaction.isModalSubmit() && interaction.customId === 'modal_timear_grafitti') {
+        await interaction.deferReply();
+
+        const selectedGraffitiNumber = interaction.fields.getString('grafitti_selector');
+        const desfaseText = interaction.fields.getString('desfase_input');
+        
+        const desfase = parseInt(desfaseText) || 0;
+        
+        // CÁLCULO DEL NUEVO SPAWN
+        const desfaseMs = desfase * 60 * 1000;
+        const actualTimestampMs = Date.now();
+        const spawnTimestampMs = actualTimestampMs - desfaseMs;
+        
+        try {
+            const updatedGraffiti = await Graffiti.findOneAndUpdate(
+                { numero: selectedGraffitiNumber },
+                { lastSpawnTimestamp: spawnTimestampMs },
+                { new: true }
+            );
+
+            if (!updatedGraffiti) {
+                 return interaction.editReply(`❌ Error: No se encontró el graffiti con número **${selectedGraffitiNumber}**.`);
+            }
+
+            const date = new Date(spawnTimestampMs);
+            const hubHour = String(date.getUTCHours()).padStart(2, '0');
+            const hubMinute = String(date.getUTCMinutes()).padStart(2, '0');
+            const hubTimeStr = `${hubHour}:${hubMinute}`;
+
+            let replyContent = `✅ Graffiti **${updatedGraffiti.nombre.toUpperCase()} (Nº ${updatedGraffiti.numero})** timeado por **${displayName}**.\n`;
+
+            if (desfase > 0) {
+                replyContent += `*(${desfase} min de desfase aplicados).* \n`;
+            }
+
+            replyContent += `Último spawn registrado: **${hubTimeStr} HUB**. (Próximo aviso en ~12h)`;
+
+            await interaction.editReply({ content: replyContent });
+            
+        } catch (error) {
+            console.error("Error al timear graffiti desde el modal:", error);
+            await interaction.editReply({
+                content: `❌ Error al timear el graffiti **Nº ${selectedGraffitiNumber}**. Inténtalo de nuevo.`,
+            });
+        }
+        return;
+    }
+    
     // --- MANEJO DE BOTONES ---
     if (interaction.isButton()) {
         const customId = interaction.customId;
@@ -570,7 +652,6 @@ client.on("interactionCreate", async (interaction) => {
             numero = parts[2];
             isNextGraffAction = true;
         } else {
-            // Acciones antiguas o desconocidas
              await interaction.deferUpdate();
              await interaction.followUp({ 
                  content: '⚠️ Interacción no válida o desactualizada.', 
@@ -579,7 +660,6 @@ client.on("interactionCreate", async (interaction) => {
             return;
         }
 
-        // --- MANEJO DE ERROR 10062 ---
         try {
             await interaction.deferUpdate();
         } catch (error) {
@@ -600,14 +680,9 @@ client.on("interactionCreate", async (interaction) => {
             if (action === 'timear' && isNextGraffAction) {
                 const nowTimestampMs = Date.now();
 
-                // Actualizar DB (eliminado rescheduleCount)
                 const updatedGraffiti = await Graffiti.findOneAndUpdate(
                     { numero: numero },
-                    {
-                        $set: {
-                            lastSpawnTimestamp: nowTimestampMs,
-                        }
-                    },
+                    { $set: { lastSpawnTimestamp: nowTimestampMs } },
                     { new: true }
                 );
 
@@ -684,11 +759,10 @@ async function main() {
     await client.login(process.env.TOKEN);
     console.log(`✅ Conectado como ${client.user.tag}`);
 
-    // Iniciar SÓLO cuando el cliente esté listo
+    // Carga la caché e inicia el intervalo
     client.once('ready', async () => {
         console.log(`✅ Bot ${client.user.tag} está listo y en línea.`);
 
-        // --- CARGA INICIAL DE CACHÉ ---
         try {
             if (ALERT_CHANNEL_ID) {
                 alertChannelCache = await client.channels.fetch(ALERT_CHANNEL_ID);
@@ -700,12 +774,12 @@ async function main() {
             console.error("❌ Error al cargar el canal de alertas inicial:", error);
         }
 
-        // Ejecución inmediata y luego intervalo
         checkGraffitiAlerts();
         setInterval(checkGraffitiAlerts, 60 * 1000);
         console.log(`✅ Tarea de verificación de alertas iniciada (cada 1 minuto).`);
     });
 
+    // Inicia el servidor Express para mantener la conexión
     const app = express();
     app.get('/', (req, res) => res.send('Bot activo ✅'));
 
