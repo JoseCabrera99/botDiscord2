@@ -79,6 +79,9 @@ const GRAFFITI_IMAGES = {
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
 const ALERT_CHANNEL_ID = process.env.ALERT_CHANNEL_ID;
 
+// --- VARIABLE GLOBAL PARA CACHÉ DEL CANAL ---
+let alertChannelCache = null;
+
 // ----------------------------------------
 // ESQUEMA Y MODELO DE MONGOOSE
 // ----------------------------------------
@@ -96,12 +99,6 @@ const GraffitiSchema = new mongoose.Schema({
     lastSpawnTimestamp: {
         type: Number,
         required: true
-    },
-    // Este campo se mantiene para compatibilidad con /setgraf,
-    // pero ya no se usa para la lógica de alertas automáticas.
-    rescheduleCount: {
-        type: Number,
-        default: 0,
     }
 }, {
     timestamps: false
@@ -142,7 +139,6 @@ function calculateNextSpawn(lastTimestampMs, totalHours) {
  */
 const getDisplayName = (interaction) => {
     if (interaction.member) {
-        // Usa el nickname si existe, sino usa el nombre de usuario
         return interaction.member.nickname || interaction.user.username;
     }
     return interaction.user.username;
@@ -154,41 +150,42 @@ const getDisplayName = (interaction) => {
 
 async function checkGraffitiAlerts() {
     if (!ALERT_CHANNEL_ID) {
-        console.error("❌ ALERT_CHANNEL_ID no está configurado. La tarea de alertas no puede ejecutarse.");
+        console.error("❌ ALERT_CHANNEL_ID no está configurado.");
         return;
     }
+
+    // --- OPTIMIZACIÓN DE CACHÉ ---
+    // Si la caché está vacía (por reinicio o error), intentamos recuperar el canal
+    if (!alertChannelCache) {
+        try {
+            console.log("⚠️ Cache de canal vacío. Intentando recuperar...");
+            alertChannelCache = await client.channels.fetch(ALERT_CHANNEL_ID);
+        } catch (error) {
+            console.error(`❌ Error crítico: No se puede obtener el canal ${ALERT_CHANNEL_ID}.`, error.message);
+            return;
+        }
+    }
+    
+    // Usamos la variable local, no hacemos fetch
+    const targetChannel = alertChannelCache;
+
+    if (!targetChannel) return;
 
     const nowMs = Date.now();
     const tenMinutesMs = 10 * 60 * 1000;
-    const elevenMinutesMs = 11 * 60 * 1000; // Ventana de alerta de 1 minuto (entre 10 y 11 min)
-
-    let targetChannel;
-    try {
-        // Se realiza la costosa llamada a la API cada minuto (comportamiento original)
-        targetChannel = await client.channels.fetch(ALERT_CHANNEL_ID);
-    } catch (error) {
-        console.error(`❌ Error al intentar obtener el canal ${ALERT_CHANNEL_ID}:`, error.message);
-        return;
-    }
-
-    if (!targetChannel) {
-        console.error(`❌ Canal de alertas con ID ${ALERT_CHANNEL_ID} no encontrado después de fetch.`);
-        return;
-    }
+    const elevenMinutesMs = 11 * 60 * 1000;
 
     try {
         const allGraffiti = await Graffiti.find({});
         const alertsToSend = [];
 
         for (const item of allGraffiti) {
-            // Iteramos sobre el ciclo fijo (12h, 13h, 14h, 15h) para encontrar la alerta activa
             for (const totalHours of ALERT_HOURS_CYCLE) {
 
                 const unlockDate = calculateNextSpawn(item.lastSpawnTimestamp, totalHours);
                 const unlockTimeMs = unlockDate.getTime();
 
-                // Si el spawn de 15h ya pasó hace más de 11 minutos,
-                // significa que la ventana de alerta para este graffiti ha expirado.
+                // Si el spawn de 15h ya pasó hace más de 11 minutos, ventana expirada.
                 if (totalHours === 15 && unlockTimeMs < (nowMs - elevenMinutesMs)) {
                      break;
                 }
@@ -204,22 +201,20 @@ async function checkGraffitiAlerts() {
                         unlockTime: `<t:${unlockTimestampSec}:t>`,
                         unlockRelative: `<t:${unlockTimestampSec}:R>`,
                     });
-
-                    // Encontramos el primer y único aviso activo en el ciclo de 12h-15h.
-                    alertFound = true;
                     break;
                 }
             }
         }
 
         if (alertsToSend.length > 0) {
-
             for (const alert of alertsToSend) {
                 const item = alert.item;
 
                 // --- BÚSQUEDA DE LA IMAGEN ---
+                // Se asegura de convertir a string para buscar en el objeto
                 const graffitiKey = `${item.numero}`;
-                const imageUrl = GRAFFITI_IMAGES[graffitiKey];
+                // Intenta buscar la imagen, si no existe usa una por defecto o null
+                const imageUrl = GRAFFITI_IMAGES[graffitiKey]; 
                 // -----------------------------
 
                 const description =
@@ -233,11 +228,9 @@ async function checkGraffitiAlerts() {
                     .setDescription(description)
                     .setTimestamp();
 
-                // --- AÑADIR LA IMAGEN AL EMBED SI LA ENCUENTRA ---
                 if (imageUrl) {
                     embed.setImage(imageUrl);
                 }
-                // ------------------------------------------------
 
                 await targetChannel.send({
                     content: `||@here||`,
@@ -331,7 +324,6 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 // ---------------------------
 client.on("interactionCreate", async (interaction) => {
 
-    // Obtener el nombre a mostrar (alias o username)
     const displayName = getDisplayName(interaction).toUpperCase();
 
     if (interaction.isChatInputCommand()) {
@@ -351,13 +343,11 @@ client.on("interactionCreate", async (interaction) => {
             const spawnTimestampMs = actualTimestampMs - desfaseMs;
 
             try {
-                // Se resetea rescheduleCount a 0 al registrar un nuevo spawn
                 await Graffiti.findOneAndUpdate(
                     { numero: numero },
                     {
                         nombre: nombre,
                         lastSpawnTimestamp: spawnTimestampMs,
-                        rescheduleCount: 0,
                     },
                     { upsert: true, new: true }
                 );
@@ -386,7 +376,7 @@ client.on("interactionCreate", async (interaction) => {
                 });
             }
         }
-        // --- LÓGICA /NEXTGRAFF (Ahora con Paginación) ---
+        // --- LÓGICA /NEXTGRAFF ---
         else if (commandName === "nextgraff") {
             await interaction.deferReply();
 
@@ -394,19 +384,17 @@ client.on("interactionCreate", async (interaction) => {
             const minutesToAdd = interaction.options.getInteger("minutos");
 
             const nowMs = Date.now();
-
             const futureDateMs = nowMs + (minutesToAdd * 60 * 1000);
             const futureDate = new Date(futureDateMs);
             const targetMinutes = futureDate.getUTCMinutes();
             const targetHours = futureDate.getUTCHours();
-
             const targetTimeStr = `${String(targetHours).padStart(2, '0')}:${String(targetMinutes).padStart(2, '0')}`;
 
             const elevenHoursMs = 11 * 60 * 60 * 1000;
             const fiveMinutesBefore = 5;
-            const CHUNK_SIZE = 5; // El tamaño de cada lote de grafitis
+            const CHUNK_SIZE = 5;
 
-            const filteredAndPreparedGraffiti = []; // Array para almacenar los datos listos
+            const filteredAndPreparedGraffiti = [];
 
             try {
                 const allGraffiti = await Graffiti.find({
@@ -419,26 +407,19 @@ client.on("interactionCreate", async (interaction) => {
                     });
                 }
 
-                // 1. Preparar y filtrar todos los resultados
                 for (const item of allGraffiti) {
-
                     const lastSpawnTimestampMs = item.lastSpawnTimestamp;
 
-                    // Si no ha pasado el umbral de 11h, lo saltamos
                     if (nowMs < (lastSpawnTimestampMs + elevenHoursMs)) {
                         continue;
                     }
 
-                    // Usamos 12h de base para la simulación
                     const unlockDate = calculateNextSpawn(lastSpawnTimestampMs, 12);
                     const unlockMinutes = unlockDate.getUTCMinutes();
 
                     let isVeryClose = false;
-
-                    // Diferencia de minutos entre el tiempo simulado y el tiempo real de unlock a 12h
                     let difference = (targetMinutes - unlockMinutes + 60) % 60;
 
-                    // Está muy cerca si la diferencia es 0, 1, 2, 3, 4, o 5 minutos.
                     if (difference >= 0 && difference <= fiveMinutesBefore) {
                         isVeryClose = true;
                     }
@@ -460,74 +441,59 @@ client.on("interactionCreate", async (interaction) => {
                         `> Desbloqueo (12h): <t:${unlockTimestampSec}:t> **(<t:${unlockTimestampSec}:R>)**`;
 
                     filteredAndPreparedGraffiti.push({
-                         item: item,
-                         message: itemMessage,
-                         isAlarm: isVeryClose,
+                        item: item,
+                        message: itemMessage,
+                        isAlarm: isVeryClose,
                     });
                 }
 
                 if (filteredAndPreparedGraffiti.length === 0) {
-                      await interaction.editReply({
-                           content: `⚠️ No se encontraron grafitis para **${filtro.toUpperCase()}** que hayan pasado el umbral de 11 horas desde su registro.`,
-                         });
-                          return;
+                    await interaction.editReply({
+                        content: `⚠️ No se encontraron grafitis para **${filtro.toUpperCase()}** que hayan pasado el umbral de 11 horas desde su registro.`,
+                    });
+                    return;
                 }
 
                 let replySent = false;
 
-                // 2. Iterar sobre los resultados en lotes (chunks) de 5
                 for (let i = 0; i < filteredAndPreparedGraffiti.length; i += CHUNK_SIZE) {
                     const chunk = filteredAndPreparedGraffiti.slice(i, i + CHUNK_SIZE);
-
                     let chunkMessages = [];
                     let chunkButtons = [];
 
                     chunk.forEach(data => {
                         chunkMessages.push(data.message);
-
                         if (data.isAlarm) {
-                            const highlightEmoji = "🚨 ";
-                            const buttonLabel = `${highlightEmoji}Timear N° ${data.item.numero}`;
-
                             chunkButtons.push(
                                 new ButtonBuilder()
                                     .setCustomId(`timear_nextgraff_${data.item.numero}`)
-                                    .setLabel(buttonLabel)
+                                    .setLabel(`🚨 Timear N° ${data.item.numero}`)
                                     .setStyle(ButtonStyle.Primary)
                             );
                         }
                     });
 
-                    // 3. Construir el Embed
                     const chunkNumber = Math.floor(i / CHUNK_SIZE) + 1;
                     const totalChunks = Math.ceil(filteredAndPreparedGraffiti.length / CHUNK_SIZE);
 
-                    // Título con la hora simulada
-                    const embedTitle = `⏳ Grafitis Cerca de Desbloqueo a las ${targetTimeStr} HUB`;
-
                     const embed = new EmbedBuilder()
                         .setColor("#3498db")
-                        .setTitle(embedTitle)
+                        .setTitle(`⏳ Grafitis Cerca de Desbloqueo a las ${targetTimeStr} HUB`)
                         .setDescription(chunkMessages.join('\n\n').trim())
                         .setTimestamp()
                         .setFooter({ text: `Filtro: ${filtro.toUpperCase()} | Lote ${chunkNumber} de ${totalChunks}` });
 
-                    const messagePayload = {
-                        embeds: [embed],
-                    };
+                    const messagePayload = { embeds: [embed] };
                     
                     if (chunkButtons.length > 0) {
                         const buttonRow = new ActionRowBuilder().addComponents(chunkButtons);
                         messagePayload.components = [buttonRow];
                     }
 
-                    // 4. Enviar el mensaje
                     if (!replySent) {
-                        // El primer lote usa editReply para responder la interacción inicial
                         await interaction.editReply(messagePayload);
                         replySent = true;
                     } else {
-                        // Los lotes subsecuentes usan followUp
                         await interaction.followUp(messagePayload);
                     }
                 }
@@ -539,7 +505,6 @@ client.on("interactionCreate", async (interaction) => {
         }
         // --- LÓGICA /GRAF ---
         else if (commandName === "graf") {
-
             if (!horaStr) {
                 return interaction.reply({ content: "Error: Falta la hora.", ephemeral: true });
             }
@@ -561,18 +526,14 @@ client.on("interactionCreate", async (interaction) => {
                 Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), hora, minutos)
             );
 
-            // Rango de desbloqueo: 12h a 15h
             const diffs = [12, 13, 14, 15];
             const horariosPosibles = diffs.map((sum) => {
                 const newDate = new Date(baseDate.getTime());
                 newDate.setUTCHours(baseDate.getUTCHours() + sum);
-
                 const hubHora = String(newDate.getUTCHours()).padStart(2, "0");
                 const hubMinutos = String(newDate.getUTCMinutes()).padStart(2, "0");
                 const hubStr = `${hubHora}:${hubMinutos}`;
-
                 const relativeTimestamp = `<t:${getUnixTimestampSec(newDate)}:R>`;
-
                 return { hub: hubStr, relative: relativeTimestamp, sum: sum };
             });
 
@@ -582,56 +543,39 @@ client.on("interactionCreate", async (interaction) => {
                 .setDescription(
                     `📍 **Ubicación:** ${ubicacion}\n🔢 **Número:** ${numero || 'N/A'}\n 🕒 HUB: ${horaStr}`
                 )
-                .addFields(
-                    {
-                        name: "⏰ Próximos Posibles Horarios (12h a 15h)",
-                        value: horariosPosibles.map((h) =>
-                            `**+${h.sum}h**\n> HUB (UTC): \`${h.hub}\` (${h.relative})`
-                        ).join("\n\n"),
-                        inline: false,
-                    },
-                )
-                .setFooter({
-                    text: "Midnight • Grafitti",
-                });
+                .addFields({
+                    name: "⏰ Próximos Posibles Horarios (12h a 15h)",
+                    value: horariosPosibles.map((h) =>
+                        `**+${h.sum}h**\n> HUB (UTC): \`${h.hub}\` (${h.relative})`
+                    ).join("\n\n"),
+                    inline: false,
+                })
+                .setFooter({ text: "Midnight • Grafitti" });
 
             await interaction.reply({ embeds: [embed] });
         }
         return;
     }
 
-    // Manejar interacciones de botones
+    // --- MANEJO DE BOTONES ---
     if (interaction.isButton()) {
         const customId = interaction.customId;
         const parts = customId.split('_');
         const action = parts[0];
 
-        // Determinar el número de graffiti y la acción específica
         let numero;
         let isNextGraffAction = false;
 
-        if (action === 'timear' && parts.length === 2) {
-            numero = parts[1];
-
-            // Forzar un mensaje de error si el botón viene de la alerta (ya no debería existir)
-            await interaction.deferUpdate();
-            await interaction.followUp({
-                content: '⚠️ Acción deshabilitada. El Timeo ahora solo se realiza con el comando **/setgraf**.',
-                ephemeral: true
-            });
-            return;
-
-        } else if (action === 'timear' && parts[1] === 'nextgraff') {
-            // Acción 'timear' proveniente de /nextgraff (timear_nextgraff_[numero])
+        if (action === 'timear' && parts[1] === 'nextgraff') {
             numero = parts[2];
             isNextGraffAction = true;
-        } else if (action === 'reschedule') {
-            // La acción 'reschedule' ya no se usa, pero la dejamos para que no rompa si existe un mensaje antiguo
-            await interaction.deferUpdate();
-            await interaction.followUp({ content: '⚠️ Esta función ha sido deshabilitada. Por favor, usa el botón "Timear" de /nextgraff o el comando /setgraf.', ephemeral: true });
-            return;
         } else {
-            // No es una acción conocida
+            // Acciones antiguas o desconocidas
+             await interaction.deferUpdate();
+             await interaction.followUp({ 
+                 content: '⚠️ Interacción no válida o desactualizada.', 
+                 ephemeral: true 
+             });
             return;
         }
 
@@ -639,69 +583,50 @@ client.on("interactionCreate", async (interaction) => {
         try {
             await interaction.deferUpdate();
         } catch (error) {
-            // Error 10062: Unknown interaction (El token de la interacción ha expirado)
             if (error.code === 10062) {
-                console.log(`⚠️ Interacción de botón expirada (Graffiti N°${numero}).`);
-                
+                console.log(`⚠️ Interacción expirada (Graffiti N°${numero}).`);
                 try {
                     await interaction.followUp({
                         content: '⚠️ Esta interacción ha expirado (más de 15 minutos). Por favor, ejecuta **/nextgraff** de nuevo.',
                         ephemeral: true
                     });
                 } catch (followUpError) {
-                }
-                return; 
+                }                return; 
             }
             throw error;
         }
-        // --- FIN DEL MANEJO DE ERROR 10062 ---
-
 
         try {
-            // ------------------------------------
-            // LÓGICA BOTÓN "Timear" (desde /nextgraff)
-            // ------------------------------------
             if (action === 'timear' && isNextGraffAction) {
                 const nowTimestampMs = Date.now();
 
-                // 1. Actualizar la BD (se actualiza el spawn y se resetea el contador a 0 para reiniciar el ciclo)
+                // Actualizar DB (eliminado rescheduleCount)
                 const updatedGraffiti = await Graffiti.findOneAndUpdate(
                     { numero: numero },
                     {
                         $set: {
                             lastSpawnTimestamp: nowTimestampMs,
-                            rescheduleCount: 0, // Reinicia el ciclo base (12h)
                         }
                     },
                     { new: true }
                 );
 
                 if (updatedGraffiti) {
-                    // El nuevo desbloqueo es +12h desde ahora
                     const unlockDate = calculateNextSpawn(updatedGraffiti.lastSpawnTimestamp, 12);
                     const unlockTimestampSec = getUnixTimestampSec(unlockDate);
 
                     const newEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
-
-                    // --- LÓGICA PARA BOTÓN /NEXTGRAFF (Incluye deshabilitar mensajes hermanos) ---
-
-                    // 2. Modificar el mensaje/Embed del mensaje clickeado
                     let newDescription = newEmbed.data.description;
 
                     const timearConfirmation = `**✅ TIMEADO POR ${displayName}**\n> Nuevo Desbloqueo (12h): <t:${unlockTimestampSec}:t> (<t:${unlockTimestampSec}:R>)`;
 
-                    // Reemplazar la línea del graffiti timeado con el estado de timeado
                     if (newDescription) {
                         const lines = newDescription.split('\n');
                         let found = false;
                         for (let i = 0; i < lines.length; i++) {
-                            // Buscar la línea que contiene el número del grafiti
                             if (lines[i].includes(`Nº ${numero}`)) {
                                 lines[i] = timearConfirmation;
                                 found = true;
-
-                                // Eliminar líneas subsecuentes (Registrado, Desbloqueo)
-                                // Aseguramos que solo borramos las líneas de detalles (que empiezan con '>')
                                 let deleteCount = 0;
                                 for(let j = i + 1; j < lines.length && deleteCount < 2; j++) {
                                     if (lines[j].startsWith('>')) {
@@ -712,17 +637,13 @@ client.on("interactionCreate", async (interaction) => {
                                 if (found) break;
                             }
                         }
-
-                        // Recomponer la descripción, quitando las líneas de borrado
                         newDescription = lines.filter(line => line !== '---LINE_TO_REMOVE---').join('\n').trim();
 
-                        // Actualizar Título y Descripción del Embed
                         newEmbed.setTitle(`✅ Graffiti N°${numero} - ${updatedGraffiti.nombre.toUpperCase()} TIMEADO`)
-                                     .setDescription(newDescription)
-                                     .setColor("#2ecc71");
+                                .setDescription(newDescription)
+                                .setColor("#2ecc71");
                     }
 
-                    // 3. Deshabilitar todos los botones en el mensaje clickeado (y cambiar el label del pulsado)
                     const disabledComponents = interaction.message.components.map(row => {
                         const newRow = ActionRowBuilder.from(row);
                         newRow.components.forEach(button => {
@@ -741,14 +662,12 @@ client.on("interactionCreate", async (interaction) => {
                     });
 
                 } else {
-                    await interaction.followUp({ content: '❌ Error: Graffiti no encontrado o ya eliminado.', ephemeral: true });
+                    await interaction.followUp({ content: '❌ Error: Graffiti no encontrado.', ephemeral: true });
                 }
             }
-
         } catch (error) {
             console.error("Error al manejar interacción de botón:", error);
-            // Si hubo un error después de deferUpdate, usamos followUp
-            await interaction.followUp({ content: '❌ Ocurrió un error al procesar el botón. Intenta usar /setgraf.', ephemeral: true });
+            await interaction.followUp({ content: '❌ Error al procesar el botón.', ephemeral: true });
         }
     }
 });
@@ -765,10 +684,23 @@ async function main() {
     await client.login(process.env.TOKEN);
     console.log(`✅ Conectado como ${client.user.tag}`);
 
-    // Iniciar el temporizador SÓLO cuando el cliente esté listo
-    client.once('ready', () => {
+    // Iniciar SÓLO cuando el cliente esté listo
+    client.once('ready', async () => {
         console.log(`✅ Bot ${client.user.tag} está listo y en línea.`);
 
+        // --- CARGA INICIAL DE CACHÉ ---
+        try {
+            if (ALERT_CHANNEL_ID) {
+                alertChannelCache = await client.channels.fetch(ALERT_CHANNEL_ID);
+                console.log(`✅ Canal de alertas (${ALERT_CHANNEL_ID}) cargado en memoria.`);
+            } else {
+                console.warn("⚠️ ALERT_CHANNEL_ID no definido en .env");
+            }
+        } catch (error) {
+            console.error("❌ Error al cargar el canal de alertas inicial:", error);
+        }
+
+        // Ejecución inmediata y luego intervalo
         checkGraffitiAlerts();
         setInterval(checkGraffitiAlerts, 60 * 1000);
         console.log(`✅ Tarea de verificación de alertas iniciada (cada 1 minuto).`);
