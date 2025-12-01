@@ -359,8 +359,7 @@ client.on("interactionCreate", async (interaction) => {
             const desfaseRow = new ActionRowBuilder().addComponents(desfaseInput);
 
             modal.addComponents(selectRow, desfaseRow);
-
-            await interaction.editReply({ content: 'Abriendo formulario...', ephemeral: true });
+            
             await interaction.showModal(modal);
             return;
         }
