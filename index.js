@@ -331,7 +331,6 @@ client.on("interactionCreate", async (interaction) => {
 
         // --- LÓGICA /TIMEAR  ---
         if (commandName === "timear") {
-            await interaction.deferReply({ ephemeral: true });
             const filtro = interaction.options.getString("filtro");
             const MAX_OPTIONS = 25;
             const filteredGraffiti = await Graffiti.find({
@@ -339,7 +338,7 @@ client.on("interactionCreate", async (interaction) => {
             }).sort({ numero: 1 }).limit(MAX_OPTIONS);
 
             if (filteredGraffiti.length === 0) {
-                return interaction.editReply({ 
+                return interaction.reply({ 
                     content: `⚠️ No se encontraron grafitis que coincidan con el filtro: **${filtro.toUpperCase()}**.`, 
                     ephemeral: true 
                 });
@@ -376,7 +375,7 @@ client.on("interactionCreate", async (interaction) => {
                 console.error("❌ ERROR CRÍTICO al mostrar el Modal:", error.message);
                 
                 // Enviamos un mensaje de error visible al usuario
-                await interaction.editReply({ 
+                await interaction.reply({ 
                     content: `❌ Error interno: No se pudo abrir el formulario. Revisa la consola del bot.`, 
                     ephemeral: true 
                 });
