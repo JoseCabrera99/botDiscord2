@@ -717,8 +717,12 @@ client.on("interactionCreate", async (interaction) => {
     }
 });
 
+client.on("ready", () => {
+    console.log(`🤖 Bot iniciado como ${client.user.tag}`);
+    // Aseguramos la conexión a la base de datos al iniciar
+    connectDB(); 
+});
 client.login(process.env.TOKEN);
-
 // Configuración básica de Express (para mantener el bot vivo, si aplica)
 const app = express();
 const port = process.env.PORT || 3000;
