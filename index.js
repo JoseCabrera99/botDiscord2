@@ -18,8 +18,6 @@ import express from 'express';
 import mongoose from "mongoose";
 dotenv.config();
 
-// Ciclo de alerta fijo (12h, 13h, 14h, 15h)
-const ALERT_HOURS_CYCLE = [12, 13, 14, 15];
 const EPHEMERAL_FLAG = 64; // Reemplaza ephemeral: true
 
 // Imagenes del graff
@@ -82,10 +80,7 @@ const GRAFFITI_IMAGES = {
 // ----------------------------------------
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
-const ALERT_CHANNEL_ID = process.env.ALERT_CHANNEL_ID;
 
-// --- VARIABLE GLOBAL PARA CACHÉ DEL CANAL ---
-let alertChannelCache = null;
 
 // ----------------------------------------
 // ESQUEMA Y MODELO DE MONGOOSE 
@@ -143,98 +138,6 @@ const getDisplayName = (interaction) => {
     return interaction.user.username;
 };
 
-// ----------------------------------------
-// TAREA PROGRAMADA DE AVISO 
-// ----------------------------------------
-
-async function checkGraffitiAlerts() {
-    if (!ALERT_CHANNEL_ID) {
-        console.error("❌ ALERT_CHANNEL_ID no está configurado.");
-        return;
-    }
-
-    // Usar la caché si está disponible
-    if (!alertChannelCache) {
-        try {
-            console.log("⚠️ Cache de canal vacío. Intentando recuperar...");
-            alertChannelCache = await client.channels.fetch(ALERT_CHANNEL_ID);
-        } catch (error) {
-            console.error(`❌ Error crítico: No se puede obtener el canal ${ALERT_CHANNEL_ID}.`, error.message);
-            return;
-        }
-    }
-    
-    const targetChannel = alertChannelCache;
-    if (!targetChannel) return;
-
-    const nowMs = Date.now();
-    const tenMinutesMs = 10 * 60 * 1000;
-    const elevenMinutesMs = 11 * 60 * 1000;
-
-    try {
-        const allGraffiti = await Graffiti.find({});
-        const alertsToSend = [];
-
-        for (const item of allGraffiti) {
-            for (const totalHours of ALERT_HOURS_CYCLE) {
-
-                const unlockDate = calculateNextSpawn(item.lastSpawnTimestamp, totalHours);
-                const unlockTimeMs = unlockDate.getTime();
-
-                // Si el spawn de 15h ya pasó hace más de 11 minutos, ventana expirada.
-                if (totalHours === 15 && unlockTimeMs < (nowMs - elevenMinutesMs)) {
-                     break;
-                }
-
-                // Verificar si la hora de desbloqueo está entre 10 y 11 minutos
-                if (unlockTimeMs > (nowMs + tenMinutesMs) && unlockTimeMs <= (nowMs + elevenMinutesMs)) {
-
-                    const unlockTimestampSec = getUnixTimestampSec(unlockDate);
-
-                    alertsToSend.push({
-                        item: item,
-                        offsetHours: totalHours,
-                        unlockTime: `<t:${unlockTimestampSec}:t>`,
-                        unlockRelative: `<t:${unlockTimestampSec}:R>`,
-                    });
-                    break;
-                }
-            }
-        }
-
-        if (alertsToSend.length > 0) {
-            for (const alert of alertsToSend) {
-                const item = alert.item;
-                const graffitiKey = `${item.numero}`;
-                const imageUrl = GRAFFITI_IMAGES[graffitiKey]; 
-
-                const description =
-                    `**Nº ${item.numero} | ${item.nombre.toUpperCase()}**\n` +
-                    `> Offset: **+${alert.offsetHours}h** (Ciclo)\n` +
-                    `> Desbloqueo: ${alert.unlockTime} **(${alert.unlockRelative})**`;
-
-                const embed = new EmbedBuilder()
-                    .setColor("#f1c40f")
-                    .setTitle(`🚨 ¡AVISO DE DESBLOQUEO DE GRAFFITIS! (+${alert.offsetHours}h) 🚨`)
-                    .setDescription(description)
-                    .setTimestamp();
-
-                if (imageUrl) {
-                    embed.setImage(imageUrl);
-                }
-
-                await targetChannel.send({
-                    content: `||@here||`,
-                    embeds: [embed],
-                });
-            }
-            console.log(`✅ Alerta de ${alertsToSend.length} grafitis enviada.`);
-        }
-
-    } catch (error) {
-        console.error("❌ Error en la tarea programada de alertas:", error);
-    }
-}
 
 
 // ---------------------------
@@ -735,7 +638,8 @@ client.on("interactionCreate", async (interaction) => {
                     });
                 } catch (followUpError) {
                     
-                }                return; 
+                } 
+                return; 
             }
             throw error;
         }
@@ -779,8 +683,8 @@ client.on("interactionCreate", async (interaction) => {
                         newDescription = lines.filter(line => line !== '---LINE_TO_REMOVE---').join('\n').trim();
 
                         newEmbed.setTitle(`✅ Graffiti N°${numero} - ${updatedGraffiti.nombre.toUpperCase()} TIMEADO`)
-                                .setDescription(newDescription)
-                                .setColor("#2ecc71");
+                                 .setDescription(newDescription)
+                                 .setColor("#2ecc71");
                     }
 
                     const disabledComponents = interaction.message.components.map(row => {
@@ -788,74 +692,39 @@ client.on("interactionCreate", async (interaction) => {
                         newRow.components.forEach(button => {
                             if (button.data.custom_id === customId) {
                                 button.setLabel(`Timeado por ${displayName}`)
-                                     .setStyle(ButtonStyle.Success);
+                                      .setStyle(ButtonStyle.Success)
+                                      .setDisabled(true);
+                            } else {
+                                button.setDisabled(true);
                             }
-                            button.setDisabled(true);
                         });
                         return newRow;
                     });
 
-                    await interaction.message.edit({
+                    await interaction.editReply({
                         embeds: [newEmbed],
                         components: disabledComponents
                     });
-
                 } else {
-                    await interaction.followUp({ content: '❌ Error: Graffiti no encontrado.', flags: EPHEMERAL_FLAG });
+                    await interaction.followUp({ content: `❌ Error: No se encontró el graffiti con número **${numero}** para actualizar.`, flags: EPHEMERAL_FLAG });
                 }
             }
         } catch (error) {
-            console.error("Error al manejar interacción de botón:", error);
-            await interaction.followUp({ content: '❌ Error al procesar el botón.', flags: EPHEMERAL_FLAG });
+            console.error(`Error al manejar el botón timear_nextgraff_${numero}:`, error);
+            await interaction.followUp({ content: "❌ Ocurrió un error al intentar timear el graffiti. Inténtalo de nuevo.", flags: EPHEMERAL_FLAG });
         }
         return;
     }
 });
 
-// ----------------------------------------
-// INICIO PRINCIPAL DE LA APLICACIÓN
-// ----------------------------------------
+client.login(process.env.TOKEN);
 
-async function main() {
-    console.log("Iniciando Bot y Conexión...");
-
-    await connectDB();
-
-    await client.login(process.env.TOKEN);
-    console.log(`✅ Conectado como ${client.user.tag}`);
-
-    // Carga la caché e inicia el intervalo
-    client.once('ready', async () => {
-        console.log(`✅ Bot ${client.user.tag} está listo y en línea.`);
-
-        try {
-            if (ALERT_CHANNEL_ID) {
-                alertChannelCache = await client.channels.fetch(ALERT_CHANNEL_ID);
-                console.log(`✅ Canal de alertas (${ALERT_CHANNEL_ID}) cargado en memoria.`);
-            } else {
-                console.warn("⚠️ ALERT_CHANNEL_ID no definido en .env");
-            }
-        } catch (error) {
-            console.error("❌ Error al cargar el canal de alertas inicial:", error);
-        }
-
-        checkGraffitiAlerts();
-        setInterval(checkGraffitiAlerts, 60 * 1000);
-        console.log(`✅ Tarea de verificación de alertas iniciada (cada 1 minuto).`);
-    });
-
-    // Inicia el servidor Express para mantener la conexión
-    const app = express();
-    app.get('/', (req, res) => res.send('Bot activo ✅'));
-
-    const port = process.env.PORT || 3000;
-
-    app.listen(port, () => {
-        console.log(`Servidor web Express activo en el puerto ${port}`);
-    });
-}
-
-main().catch(error => {
-    console.error("Error fatal al iniciar la aplicación:", error);
-    process.exit(1);
+// Configuración básica de Express (para mantener el bot vivo, si aplica)
+const app = express();
+const port = process.env.PORT || 3000;
+app.get('/', (req, res) => {
+  res.send('Bot de Discord está vivo.');
+});
+app.listen(port, () => {
+  console.log(`Express está escuchando en el puerto ${port}`);
 });
