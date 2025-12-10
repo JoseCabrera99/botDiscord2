@@ -717,7 +717,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 });
 
-client.on("ready", () => {
+client.on("clientReady", () => { 
     console.log(`🤖 Bot iniciado como ${client.user.tag}`);
     // Aseguramos la conexión a la base de datos al iniciar
     connectDB(); 
